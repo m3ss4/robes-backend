@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: ankane/pgvector
+    container_name: wardrobe_postgres
+    environment:
+      POSTGRES_DB: wardrobe
+      POSTGRES_USER: wardrobe
+      POSTGRES_PASSWORD: wardrobe
+    ports: ["5432:5432"]
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wardrobe"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: wardrobe_redis
+    ports: ["6379:6379"]
+
+  api:
+    build:
+      context: .
+      args:
+        CLIP_MODEL: ViT-B-32
+        CLIP_PRETRAINED: laion2b_s34b_b79k
+    container_name: wardrobe_api
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      - CLIP_MODEL=ViT-B-32
+      - CLIP_PRETRAINED=laion2b_s34b_b79k
+      - CLIP_CHECKPOINT_PATH=/models/open_clip/ViT-B-32/laion2b_s34b_b79k.bin
+    ports: ["8001:8000"]
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --reload
+    volumes:
+      - .:/app  # fine; /models lives in the image and is not overridden
+
+  worker:
+    build:
+      context: .
+      args:
+        CLIP_MODEL: ViT-B-32
+        CLIP_PRETRAINED: laion2b_s34b_b79k
+    container_name: wardrobe_worker
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_started
+    environment:
+      - CLIP_MODEL=ViT-B-32
+      - CLIP_PRETRAINED=laion2b_s34b_b79k
+      - CLIP_CHECKPOINT_PATH=/models/open_clip/ViT-B-32/laion2b_s34b_b79k.bin
+    command: celery -A workers.celery_app.celery worker -Q images -l info
+    volumes:
+      - .:/app
+
+volumes:
+  db_data:

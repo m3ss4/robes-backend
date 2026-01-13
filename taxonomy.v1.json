@@ -1,0 +1,261 @@
+{
+  "version": "1.0",
+  "facets": {
+    "category": {
+      "type": "enum",
+      "values": [
+        "top",
+        "bottom",
+        "onepiece",
+        "outerwear",
+        "footwear",
+        "accessory",
+        "underlayer"
+      ]
+    },
+    "type": {
+      "type": "enum_by_category",
+      "values": {
+        "top": [
+          "tshirt",
+          "shirt",
+          "blouse",
+          "knit",
+          "hoodie",
+          "sweatshirt",
+          "polo",
+          "tank"
+        ],
+        "bottom": [
+          "jeans",
+          "chinos",
+          "trousers",
+          "shorts",
+          "skirt"
+        ],
+        "onepiece": [
+          "dress",
+          "jumpsuit"
+        ],
+        "outerwear": [
+          "jacket",
+          "coat",
+          "blazer",
+          "raincoat",
+          "puffer",
+          "gilet"
+        ],
+        "footwear": [
+          "sneakers",
+          "boots",
+          "loafers",
+          "heels",
+          "sandals",
+          "dress-shoes",
+          "trainers"
+        ],
+        "accessory": [
+          "belt",
+          "bag",
+          "hat",
+          "scarf",
+          "tie"
+        ],
+        "underlayer": [
+          "thermal-top",
+          "thermal-bottom",
+          "base-top",
+          "base-bottom"
+        ]
+      }
+    },
+    "fit": {
+      "type": "enum_by_category",
+      "values": {
+        "top": [
+          "slim",
+          "regular",
+          "relaxed",
+          "oversized"
+        ],
+        "bottom": [
+          "skinny",
+          "slim",
+          "straight",
+          "tapered",
+          "wide"
+        ],
+        "onepiece": [
+          "a-line",
+          "bodycon",
+          "wrap",
+          "shift"
+        ],
+        "outerwear": [
+          "slim",
+          "regular",
+          "relaxed",
+          "oversized"
+        ],
+        "footwear": [
+          "regular"
+        ],
+        "accessory": [
+          "regular"
+        ],
+        "underlayer": [
+          "slim",
+          "regular"
+        ]
+      }
+    },
+    "fabric_kind": {
+      "type": "enum",
+      "values": [
+        "knit",
+        "woven",
+        "denim",
+        "leather",
+        "linen",
+        "fleece",
+        "shell",
+        "jersey"
+      ]
+    },
+    "material": {
+      "type": "enum",
+      "values": [
+        "cotton",
+        "wool",
+        "cashmere",
+        "silk",
+        "linen",
+        "polyester",
+        "nylon",
+        "elastane",
+        "leather",
+        "suede"
+      ]
+    },
+    "pattern": {
+      "type": "enum",
+      "values": [
+        "solid",
+        "stripe",
+        "check",
+        "herringbone",
+        "houndstooth",
+        "polka-dot",
+        "floral",
+        "graphic"
+      ]
+    },
+    "base_color": {
+      "type": "enum",
+      "values": [
+        "black",
+        "charcoal",
+        "gray",
+        "white",
+        "navy",
+        "blue",
+        "teal",
+        "green",
+        "olive",
+        "brown",
+        "tan",
+        "beige",
+        "cream",
+        "red",
+        "burgundy",
+        "pink",
+        "purple",
+        "yellow",
+        "orange"
+      ]
+    },
+    "tone": {
+      "type": "enum",
+      "values": [
+        "cool",
+        "neutral",
+        "warm"
+      ]
+    },
+    "warmth": {
+      "type": "int_enum",
+      "values": [
+        -2,
+        -1,
+        0,
+        1,
+        2
+      ]
+    },
+    "formality": {
+      "type": "float_range",
+      "range": [
+        0.0,
+        1.0
+      ]
+    },
+    "layer_role": {
+      "type": "enum",
+      "values": [
+        "base",
+        "mid",
+        "outer"
+      ]
+    },
+    "season_tags": {
+      "type": "set_enum",
+      "values": [
+        "spring",
+        "summer",
+        "autumn",
+        "winter"
+      ],
+      "max": 2
+    },
+    "event_tags": {
+      "type": "set_enum",
+      "values": [
+        "office",
+        "business-formal",
+        "business-casual",
+        "smart-casual",
+        "casual",
+        "evening",
+        "formal",
+        "black-tie",
+        "party",
+        "wedding",
+        "interview",
+        "gym",
+        "hiking",
+        "beach",
+        "travel",
+        "outdoor"
+      ],
+      "max": 6
+    },
+    "style_tags": {
+      "type": "set_open",
+      "suggestions": [
+        "minimal",
+        "classic",
+        "preppy",
+        "streetwear",
+        "athleisure",
+        "boho",
+        "vintage",
+        "edgy",
+        "maximalist",
+        "utilitarian",
+        "techwear",
+        "romantic"
+      ],
+      "max": 10
+    }
+  }
+}
