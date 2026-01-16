@@ -28,6 +28,7 @@ from app.schemas.schemas import (
     ItemOut,
     ItemWearLogIn,
     ItemWearLogOut,
+    ItemWearLogDeleteIn,
     SuggestAttributesIn,
     SuggestAttributesOut,
     SuggestDraft,
@@ -40,6 +41,29 @@ from app.schemas.schemas import (
 router = APIRouter(prefix="/items", tags=["items"])
 # Use uvicorn logger so INFO messages show up in container logs
 logger = logging.getLogger("uvicorn.error")
+
+ATTRIBUTE_SOURCE_FIELDS = {
+    "status": "status",
+    "category": "category",
+    "type": "item_type",
+    "fit": "fit",
+    "fabric_kind": "fabric_kind",
+    "pattern": "pattern",
+    "tone": "tone",
+    "layer_role": "layer_role",
+    "name": "name",
+    "brand": "brand",
+    "base_color": "base_color",
+    "material": "material",
+    "warmth": "warmth",
+    "formality": "formality",
+    "kind": "kind",
+}
+TAG_SOURCE_FIELDS = {
+    "style_tags": "style_tags",
+    "event_tags": "event_tags",
+    "season_tags": "season_tags",
+}
 
 def _apply_updates(item: Item, data: Dict[str, Any], category_hint: Optional[str]) -> None:
     if "kind" in data and data["kind"]:
@@ -72,6 +96,26 @@ def _apply_updates(item: Item, data: Dict[str, Any], category_hint: Optional[str
         item.warmth = _normalize_facet("warmth", data["warmth"])
     if "formality" in data:
         item.formality = _normalize_facet("formality", data["formality"])
+
+def _update_attribute_sources(
+    item: Item,
+    updates: Dict[str, Any],
+    before: Dict[str, Any],
+    field_map: Dict[str, str],
+    source_overrides: Optional[Dict[str, str]] = None,
+) -> None:
+    sources = dict(item.attribute_sources or {})
+    now = datetime.now(timezone.utc).isoformat()
+    overrides = source_overrides or {}
+    for api_field, model_field in field_map.items():
+        if api_field not in updates:
+            continue
+        if before.get(model_field) == getattr(item, model_field):
+            continue
+        source = overrides.get(api_field, "user")
+        sources[api_field] = {"source": source, "updated_at": now}
+    if sources:
+        item.attribute_sources = sources
 
 def _tag_error(category: str, tag: str, reason: str) -> HTTPException:
     return HTTPException(
@@ -221,10 +265,27 @@ async def item_usage(
     res = await session.execute(
         select(func.max(OutfitWearLog.worn_at), func.count(OutfitWearLog.id))
         .join(OutfitWearLogItem, OutfitWearLogItem.wear_log_id == OutfitWearLog.id)
-        .where(OutfitWearLog.user_id == user_id, OutfitWearLogItem.item_id == item_id)
+        .where(
+            OutfitWearLog.user_id == user_id,
+            OutfitWearLogItem.item_id == item_id,
+            OutfitWearLog.deleted_at.is_(None),
+        )
     )
-    last_worn, count = res.one()
-    return {"item_id": str(item_id), "last_worn_at": str(last_worn) if last_worn else None, "wear_count": int(count or 0)}
+    last_worn_outfit, count_outfit = res.one()
+    res = await session.execute(
+        select(func.max(ItemWearLog.worn_at), func.count(ItemWearLog.id)).where(
+            ItemWearLog.user_id == user_id,
+            ItemWearLog.item_id == item_id,
+            ItemWearLog.deleted_at.is_(None),
+        )
+    )
+    last_worn_item, count_item = res.one()
+    last_worn = max([dt for dt in [last_worn_outfit, last_worn_item] if dt is not None], default=None)
+    return {
+        "item_id": str(item_id),
+        "last_worn_at": str(last_worn) if last_worn else None,
+        "wear_count": int((count_outfit or 0) + (count_item or 0)),
+    }
 
 
 @router.post("/{item_id}/wear-log", response_model=ItemWearLogOut)
@@ -242,7 +303,10 @@ async def log_item_wear(
     # idempotent per day
     res = await session.execute(
         select(ItemWearLog).where(
-            ItemWearLog.user_id == user_id, ItemWearLog.item_id == item_id, ItemWearLog.worn_date == worn_date
+            ItemWearLog.user_id == user_id,
+            ItemWearLog.item_id == item_id,
+            ItemWearLog.worn_date == worn_date,
+            ItemWearLog.deleted_at.is_(None),
         )
     )
     existing = res.scalar_one_or_none()
@@ -270,7 +334,10 @@ async def log_item_wear(
         # race: try fetch existing
         res = await session.execute(
             select(ItemWearLog).where(
-                ItemWearLog.user_id == user_id, ItemWearLog.item_id == item_id, ItemWearLog.worn_date == worn_date
+                ItemWearLog.user_id == user_id,
+                ItemWearLog.item_id == item_id,
+                ItemWearLog.worn_date == worn_date,
+                ItemWearLog.deleted_at.is_(None),
             )
         )
         existing = res.scalar_one_or_none()
@@ -291,6 +358,68 @@ async def log_item_wear(
         worn_date=str(log.worn_date),
         source=log.source,
     )
+
+
+@router.patch("/{item_id}/wear-log/{log_id}", status_code=204)
+async def delete_item_wear_log(
+    item_id: UUID,
+    log_id: UUID,
+    payload: ItemWearLogDeleteIn,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user_id),
+):
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("deleted") is not True and data.get("source") != "deleted":
+        raise HTTPException(status_code=400, detail="invalid_delete_request")
+    res = await session.execute(
+        select(ItemWearLog).where(
+            ItemWearLog.id == log_id,
+            ItemWearLog.item_id == item_id,
+            ItemWearLog.user_id == user_id,
+        )
+    )
+    log = res.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="wear_log_not_found")
+    if log.deleted_at is None:
+        log.deleted_at = datetime.now(timezone.utc)
+        if data.get("source"):
+            log.source = data["source"]
+        elif data.get("deleted") is True and not log.source:
+            log.source = "deleted"
+        await session.commit()
+    return None
+
+
+@router.get("/{item_id}/history", response_model=list[ItemWearLogOut])
+async def item_history(
+    item_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user_id),
+):
+    item = await session.get(Item, item_id)
+    if not item or str(item.user_id) != str(user_id):
+        raise HTTPException(status_code=404, detail="item_not_found")
+    res = await session.execute(
+        select(ItemWearLog)
+        .where(
+            ItemWearLog.user_id == user_id,
+            ItemWearLog.item_id == item_id,
+            ItemWearLog.deleted_at.is_(None),
+        )
+        .order_by(ItemWearLog.worn_at.desc())
+    )
+    logs = res.scalars().all()
+    return [
+        ItemWearLogOut(
+            id=str(l.id),
+            item_id=str(l.item_id),
+            worn_at=str(l.worn_at),
+            worn_date=str(getattr(l, "worn_date", None)) if getattr(l, "worn_date", None) else None,
+            source=l.source,
+        )
+        for l in logs
+    ]
 
 
 ALLOWED_CT = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
@@ -337,9 +466,12 @@ async def update_item(
         raise HTTPException(status_code=403, detail="forbidden")
 
     data = payload.model_dump(exclude_unset=True)
+    source_overrides = data.pop("attribute_sources", None) or {}
+    before = {model_field: getattr(item, model_field) for model_field in ATTRIBUTE_SOURCE_FIELDS.values()}
     # normalize and apply
     category_hint = data.get("category") or item.category
     _apply_updates(item, data, category_hint)
+    _update_attribute_sources(item, data, before, ATTRIBUTE_SOURCE_FIELDS, source_overrides)
 
     await session.commit()
     await session.refresh(item)
@@ -426,6 +558,7 @@ def _build_item_out(item: Item) -> ItemOut:
         id=str(item.id),
         kind=item.kind,
         status=item.status,
+        attribute_sources=item.attribute_sources,
         category=item.category,
         type=item.item_type,
         fit=item.fit,
@@ -465,6 +598,7 @@ async def create_item(
     event_tags = _normalize_category_tags("event", payload.event_tags)
     season_tags = _normalize_category_tags("season", payload.season_tags)
     data = payload.model_dump()
+    source_overrides = data.pop("attribute_sources", None) or {}
     # Remove alias-only field; we store it as item_type
     data.pop("type", None)
     # Images are stored in item_image table, not on item
@@ -492,6 +626,22 @@ async def create_item(
             "season_tags": season_tags if payload.season_tags is not None else None,
         }
     )
+    sources: dict[str, dict[str, str]] = {}
+    now = datetime.now(timezone.utc).isoformat()
+    for api_field, model_field in ATTRIBUTE_SOURCE_FIELDS.items():
+        value = data.get(model_field)
+        if api_field == "type":
+            value = item_type
+        if value is None:
+            continue
+        sources[api_field] = {"source": source_overrides.get(api_field, "user"), "updated_at": now}
+    for api_field, model_field in TAG_SOURCE_FIELDS.items():
+        value = data.get(model_field)
+        if value is None:
+            continue
+        sources[api_field] = {"source": source_overrides.get(api_field, "user"), "updated_at": now}
+    if sources:
+        data["attribute_sources"] = sources
     stmt = insert(Item).values(**data, user_id=user_id).returning(Item)
     res = await session.execute(stmt)
     item = res.scalar_one()
@@ -574,6 +724,20 @@ async def patch_item_tags(
     item.style_tags = style_tags
     item.event_tags = event_tags
     item.season_tags = season_tags
+    updates: Dict[str, Any] = {}
+    if style_tags != style_existing:
+        updates["style_tags"] = style_tags
+    if event_tags != event_existing:
+        updates["event_tags"] = event_tags
+    if season_tags != season_existing:
+        updates["season_tags"] = season_tags
+    if updates:
+        before = {
+            "style_tags": style_existing,
+            "event_tags": event_existing,
+            "season_tags": season_existing,
+        }
+        _update_attribute_sources(item, updates, before, TAG_SOURCE_FIELDS)
     await session.commit()
     await session.refresh(item)
 

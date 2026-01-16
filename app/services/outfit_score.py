@@ -100,7 +100,11 @@ async def _rotation_score(session: AsyncSession, user_id: str, item_ids: List[st
         select(func.max(OutfitWearLog.worn_at))
         .select_from(OutfitWearLog)
         .join(OutfitWearLogItem, OutfitWearLogItem.wear_log_id == OutfitWearLog.id)
-        .where(OutfitWearLog.user_id == user_id, OutfitWearLogItem.item_id.in_(item_ids))
+        .where(
+            OutfitWearLog.user_id == user_id,
+            OutfitWearLogItem.item_id.in_(item_ids),
+            OutfitWearLog.deleted_at.is_(None),
+        )
     )
     last = res.scalar_one_or_none()
     if not last:

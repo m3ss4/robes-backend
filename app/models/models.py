@@ -24,6 +24,7 @@ class Item(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
+    attribute_sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     category: Mapped[str | None] = mapped_column(String(32), nullable=True)
     item_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     fit: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -44,7 +45,13 @@ class Item(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    images: Mapped[list["ItemImage"]] = relationship("ItemImage", back_populates="item", lazy="selectin")
+    images: Mapped[list["ItemImage"]] = relationship(
+        "ItemImage",
+        back_populates="item",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 class ItemImage(Base):
     __tablename__ = "item_image"
@@ -99,6 +106,7 @@ class Outfit(Base):
     name: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="user_saved")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feedback: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     attributes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -138,12 +146,14 @@ class OutfitWearLog(Base):
     outfit_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("outfit_revision.id", ondelete="SET NULL"))
     worn_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     worn_date: Mapped[date | None] = mapped_column(sa.Date(), nullable=True)
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
     event: Mapped[str | None] = mapped_column(Text, nullable=True)
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     weather: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     season: Mapped[str | None] = mapped_column(Text, nullable=True)
     mood: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -162,6 +172,7 @@ class ItemWearLog(Base):
     worn_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     worn_date: Mapped[date | None] = mapped_column(sa.Date(), nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -194,6 +205,16 @@ class Account(Base):
     provider: Mapped[str] = mapped_column(Text)
     provider_user_id: Mapped[str] = mapped_column(Text)
     raw_profile: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_token"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE"))
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 class ItemSuggestionAudit(Base):
     __tablename__ = "item_suggestion_audit"

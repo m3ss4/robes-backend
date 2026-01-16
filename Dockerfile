@@ -8,7 +8,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Install only what's needed to fetch weights once
-RUN pip install --no-cache-dir torch==2.4.0 open-clip-torch==2.24.0
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.4.0 \
+ && pip install --no-cache-dir open-clip-torch==2.24.0
+
 
 # Download the checkpoint via open-clip and copy to a stable path in /models
 RUN python - <<'PY'
@@ -39,8 +41,7 @@ if not cands:
     raise SystemExit(f"Checkpoint not found for {model}:{pre} in {cache_dir}")
 
 src = cands[0]
-ext = pathlib.Path(src).suffix or ".bin"
-dest = f"/models/open_clip/{model}/{pre}{ext}"
+dest = f"/models/open_clip/{model}/{pre}.bin"
 pathlib.Path(dest).parent.mkdir(parents=True, exist_ok=True)
 
 shutil.copy2(src, dest)

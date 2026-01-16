@@ -28,3 +28,4 @@ open-clip-torch==2.24.0
 opencv-python-headless
 scikit-image
 numpy
+psycopg[binary]>=3.2

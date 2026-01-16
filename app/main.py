@@ -3,7 +3,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.routers import health, items, outfits
+from app.routers import health, items, outfits, wear as wear_router
 from app.routers import tags as tags_router
 from app.routers import taxonomy as taxonomy_router
 from app.routers import auth as auth_router
@@ -32,6 +32,7 @@ app.include_router(tags_router.router, prefix=prefix)
 app.include_router(taxonomy_router.router, prefix=prefix)
 app.include_router(auth_router.router, prefix=prefix)
 app.include_router(sessions_router.router, prefix=prefix)
+app.include_router(wear_router.router, prefix=prefix)
 
 # LLM providers
 try:

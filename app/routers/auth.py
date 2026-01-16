@@ -1,14 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert
+from sqlalchemy import select, update
 from app.core.db import get_session
 from app.auth.jwt import mint_access, mint_refresh, decode_token
 from app.auth.passwords import hash_pw, verify_pw
 from app.auth.google import verify_google_id_token
 from app.auth.apple import verify_apple_identity_token
-from app.models.models import User, Account
+from app.models.models import User, Account, PasswordResetToken
+from app.core.config import settings
 from uuid import uuid4
+from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -27,6 +31,26 @@ class LoginIn(BaseModel):
 class TokenOut(BaseModel):
     access: str
     refresh: str
+
+
+class PasswordResetRequestIn(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetRequestOut(BaseModel):
+    ok: bool = True
+    reset_token: str | None = None
+    expires_at: str | None = None
+
+
+class PasswordResetConfirmIn(BaseModel):
+    token: str
+    new_password: str
+
+
+def _hash_reset_token(token: str) -> str:
+    raw = f"{token}{settings.SECRET_KEY}".encode()
+    return hashlib.sha256(raw).hexdigest()
 
 
 @router.post("/signup", response_model=TokenOut)
@@ -95,6 +119,58 @@ async def refresh_token(body: RefreshIn):
         raise HTTPException(status_code=401, detail="invalid_refresh")
     uid = data["sub"]
     return TokenOut(access=mint_access(uid), refresh=mint_refresh(uid))
+
+
+@router.post("/password-reset/request", response_model=PasswordResetRequestOut)
+async def request_password_reset(body: PasswordResetRequestIn, session: AsyncSession = Depends(get_session)):
+    res = await session.execute(select(User).where(User.email == body.email))
+    user = res.scalar_one_or_none()
+    if not user or not user.password_hash:
+        return PasswordResetRequestOut(ok=True)
+
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        update(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > now,
+        )
+        .values(used_at=now)
+    )
+
+    token = secrets.token_urlsafe(32)
+    expires_at = now + timedelta(hours=1)
+    session.add(
+        PasswordResetToken(
+            id=uuid4(),
+            user_id=user.id,
+            token_hash=_hash_reset_token(token),
+            expires_at=expires_at,
+        )
+    )
+    await session.commit()
+
+    if settings.APP_ENV != "prod":
+        return PasswordResetRequestOut(ok=True, reset_token=token, expires_at=expires_at.isoformat())
+    return PasswordResetRequestOut(ok=True)
+
+
+@router.post("/password-reset/confirm", response_model=TokenOut)
+async def confirm_password_reset(body: PasswordResetConfirmIn, session: AsyncSession = Depends(get_session)):
+    now = datetime.now(timezone.utc)
+    token_hash = _hash_reset_token(body.token)
+    res = await session.execute(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash))
+    prt = res.scalar_one_or_none()
+    if not prt or prt.used_at or prt.expires_at < now:
+        raise HTTPException(status_code=400, detail="invalid_reset_token")
+    user = await session.get(User, prt.user_id)
+    if not user:
+        raise HTTPException(status_code=400, detail="invalid_reset_token")
+    user.password_hash = hash_pw(body.new_password)
+    prt.used_at = now
+    await session.commit()
+    return TokenOut(access=mint_access(str(user.id)), refresh=mint_refresh(str(user.id)))
 
 
 async def _upsert_oauth_user(

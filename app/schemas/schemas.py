@@ -17,6 +17,7 @@ class ItemImageOut(BaseModel):
 
 class ItemCreate(BaseModel):
     kind: Literal["top","bottom","onepiece","outerwear","footwear","accessory","underlayer"]
+    attribute_sources: Optional[Dict[str, Literal["user", "suggested"]]] = None
     category: Optional[str] = None
     type: Optional[str] = Field(None, alias="type")
     fit: Optional[str] = None
@@ -39,6 +40,7 @@ class ItemCreate(BaseModel):
 class ItemUpdate(BaseModel):
     kind: Optional[Literal["top","bottom","onepiece","outerwear","footwear","accessory","underlayer"]] = None
     status: Optional[str] = None
+    attribute_sources: Optional[Dict[str, Literal["user", "suggested"]]] = None
     category: Optional[str] = None
     type: Optional[str] = Field(None, alias="type")
     fit: Optional[str] = None
@@ -58,6 +60,7 @@ class ItemOut(BaseModel):
     id: str
     kind: str
     status: Optional[str] = "active"
+    attribute_sources: Optional[Dict[str, Dict[str, Any]]] = None
     category: Optional[str] = None
     type: Optional[str] = Field(None, alias="type")
     fit: Optional[str] = None
@@ -146,6 +149,7 @@ class OutfitOut(BaseModel):
     name: Optional[str] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    feedback: Optional[Dict[str, Any]] = None
     attributes: Optional[Dict[str, Any]] = None
     metrics: Optional[Dict[str, Any]] = None
     source: Optional[str] = None
@@ -174,9 +178,15 @@ class WearLogOut(BaseModel):
     worn_date: Optional[str] = None
     source: Optional[str] = None
     event: Optional[str] = None
+    location: Optional[str] = None
     season: Optional[str] = None
     mood: Optional[str] = None
     notes: Optional[str] = None
+
+
+class WearLogDeleteIn(BaseModel):
+    deleted: Optional[bool] = None
+    source: Optional[str] = None
 
 
 class ItemWearLogIn(BaseModel):
@@ -192,6 +202,11 @@ class ItemWearLogOut(BaseModel):
     source: Optional[str] = None
 
 
+class ItemWearLogDeleteIn(BaseModel):
+    deleted: Optional[bool] = None
+    source: Optional[str] = None
+
+
 class ScoreRequest(BaseModel):
     items: List[OutfitItemIn]
     context: Optional[Dict[str, Any]] = None
@@ -199,6 +214,17 @@ class ScoreRequest(BaseModel):
 
 class ScoreOut(BaseModel):
     metrics: Dict[str, Any]
+
+class OutfitFeedbackIn(BaseModel):
+    score_grade: Optional[Literal["A", "B", "C", "D", "E", "F"]] = None
+    feel_tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+
+class OutfitFeedbackOut(BaseModel):
+    outfit_id: str
+    feedback: OutfitFeedbackIn
+    updated_at: Optional[str] = None
 
 
 class OutfitDecisionIn(BaseModel):

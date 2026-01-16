@@ -12,8 +12,11 @@ from app.schemas.schemas import (
     OutfitOut,
     WearLogIn,
     WearLogOut,
+    WearLogDeleteIn,
     ScoreRequest,
     ScoreOut,
+    OutfitFeedbackIn,
+    OutfitFeedbackOut,
     OutfitDecisionIn,
 )
 from app.auth.deps import get_current_user_id
@@ -76,6 +79,17 @@ def _pattern_ok(sel: list[dict], item_lookup: dict[str, Item]) -> bool:
         if item and item.pattern and item.pattern != "solid":
             patterned += 1
     return patterned <= 1
+
+
+def _normalize_feel_tags(tags: list[str]) -> list[str]:
+    cleaned = []
+    for tag in tags or []:
+        if not tag:
+            continue
+        trimmed = tag.strip()
+        if trimmed:
+            cleaned.append(trimmed[:32])
+    return cleaned[:12]
 
 
 def _item_descriptors(sel: list[dict], item_lookup: dict[str, Item]) -> list[dict]:
@@ -351,6 +365,7 @@ async def _outfit_out(outfit: OutfitModel, session: AsyncSession) -> OutfitOut:
         name=outfit.name,
         status=outfit.status,
         notes=outfit.notes,
+        feedback=outfit.feedback,
         attributes=outfit.attributes,
         metrics=outfit.metrics,
         source=outfit.source,
@@ -437,6 +452,33 @@ async def update_outfit(
     return await _outfit_out(outfit, session)
 
 
+@router.patch("/{outfit_id}/feedback", response_model=OutfitFeedbackOut)
+async def update_outfit_feedback(
+    outfit_id: str,
+    payload: OutfitFeedbackIn,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user_id),
+):
+    res = await session.execute(select(OutfitModel).where(OutfitModel.id == outfit_id, OutfitModel.user_id == user_id))
+    outfit = res.scalar_one_or_none()
+    if not outfit:
+        raise HTTPException(status_code=404, detail="outfit_not_found")
+    data = payload.model_dump(exclude_unset=True)
+    if "feel_tags" in data and data["feel_tags"] is not None:
+        data["feel_tags"] = _normalize_feel_tags(data["feel_tags"])
+    if data:
+        feedback = dict(outfit.feedback or {})
+        feedback.update(data)
+        outfit.feedback = feedback
+        await session.commit()
+        await session.refresh(outfit)
+    return OutfitFeedbackOut(
+        outfit_id=str(outfit.id),
+        feedback=OutfitFeedbackIn(**(outfit.feedback or {})),
+        updated_at=str(outfit.updated_at) if getattr(outfit, "updated_at", None) else None,
+    )
+
+
 @router.delete("/{outfit_id}", status_code=204)
 async def delete_outfit(
     outfit_id: str,
@@ -472,7 +514,12 @@ async def log_wear(
 
     # idempotent per day
     existing_q = await session.execute(
-        select(OutfitWearLog).where(OutfitWearLog.user_id == user_id, OutfitWearLog.outfit_id == outfit_id, OutfitWearLog.worn_date == worn_date)
+        select(OutfitWearLog).where(
+            OutfitWearLog.user_id == user_id,
+            OutfitWearLog.outfit_id == outfit_id,
+            OutfitWearLog.worn_date == worn_date,
+            OutfitWearLog.deleted_at.is_(None),
+        )
     )
     existing = existing_q.scalar_one_or_none()
     if existing:
@@ -481,8 +528,9 @@ async def log_wear(
             outfit_id=str(existing.outfit_id),
             worn_at=str(existing.worn_at),
             worn_date=str(existing.worn_date),
-            source=getattr(existing, "event", None),
+            source=existing.source,
             event=existing.event,
+            location=existing.location,
             season=existing.season,
             mood=existing.mood,
             notes=existing.notes,
@@ -510,6 +558,7 @@ async def log_wear(
         outfit_revision_id=rev.id,
         worn_at=worn_at,
         worn_date=worn_date,
+        source=payload.source,
         event=payload.event,
         location=payload.location,
         weather=payload.weather,
@@ -524,7 +573,12 @@ async def log_wear(
         await session.rollback()
         # race: try existing
         existing_q = await session.execute(
-            select(OutfitWearLog).where(OutfitWearLog.user_id == user_id, OutfitWearLog.outfit_id == outfit_id, OutfitWearLog.worn_date == worn_date)
+            select(OutfitWearLog).where(
+                OutfitWearLog.user_id == user_id,
+                OutfitWearLog.outfit_id == outfit_id,
+                OutfitWearLog.worn_date == worn_date,
+                OutfitWearLog.deleted_at.is_(None),
+            )
         )
         existing = existing_q.scalar_one_or_none()
         if existing:
@@ -533,8 +587,9 @@ async def log_wear(
                 outfit_id=str(existing.outfit_id),
                 worn_at=str(existing.worn_at),
                 worn_date=str(existing.worn_date),
-                source=getattr(existing, "event", None),
+                source=existing.source,
                 event=existing.event,
+                location=existing.location,
                 season=existing.season,
                 mood=existing.mood,
                 notes=existing.notes,
@@ -549,12 +604,44 @@ async def log_wear(
         outfit_id=str(outfit.id),
         worn_at=str(log.worn_at),
         worn_date=str(log.worn_date),
-        source=getattr(log, "event", None),
+        source=log.source,
         event=log.event,
+        location=log.location,
         season=log.season,
         mood=log.mood,
         notes=log.notes,
     )
+
+
+@router.patch("/{outfit_id}/wear-log/{log_id}", status_code=204)
+async def delete_wear_log_entry(
+    outfit_id: str,
+    log_id: str,
+    payload: WearLogDeleteIn,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user_id),
+):
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("deleted") is not True and data.get("source") != "deleted":
+        raise HTTPException(status_code=400, detail="invalid_delete_request")
+    res = await session.execute(
+        select(OutfitWearLog).where(
+            OutfitWearLog.id == log_id,
+            OutfitWearLog.outfit_id == outfit_id,
+            OutfitWearLog.user_id == user_id,
+        )
+    )
+    log = res.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="wear_log_not_found")
+    if log.deleted_at is None:
+        log.deleted_at = datetime.now(timezone.utc)
+        if data.get("source"):
+            log.source = data["source"]
+        elif data.get("deleted") is True and not log.source:
+            log.source = "deleted"
+        await session.commit()
+    return None
 
 
 @router.get("/{outfit_id}/history", response_model=List[WearLogOut])
@@ -563,7 +650,15 @@ async def outfit_history(
     session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_user_id),
 ):
-    res = await session.execute(select(OutfitWearLog).where(OutfitWearLog.outfit_id == outfit_id, OutfitWearLog.user_id == user_id).order_by(OutfitWearLog.worn_at.desc()))
+    res = await session.execute(
+        select(OutfitWearLog)
+        .where(
+            OutfitWearLog.outfit_id == outfit_id,
+            OutfitWearLog.user_id == user_id,
+            OutfitWearLog.deleted_at.is_(None),
+        )
+        .order_by(OutfitWearLog.worn_at.desc())
+    )
     logs = res.scalars().all()
     return [
         WearLogOut(
@@ -571,8 +666,9 @@ async def outfit_history(
             outfit_id=str(l.outfit_id),
             worn_at=str(l.worn_at),
             worn_date=str(getattr(l, "worn_date", None)) if getattr(l, "worn_date", None) else None,
-            source=getattr(l, "event", None),
+            source=l.source,
             event=l.event,
+            location=l.location,
             season=l.season,
             mood=l.mood,
             notes=l.notes,
