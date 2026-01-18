@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     STRIPE_THR: float = 0.08
     PLAID_THR: float = 0.05
     DOT_THR: float = 0.04
+    PAIRING_MIN_SCORE: float = 25.0
 
     @property
     def cors_origin_list(self) -> List[str]:

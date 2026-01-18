@@ -1,11 +1,12 @@
 from uuid import UUID
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone, date
+import asyncio
 import time
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, insert, select, func
+from sqlalchemy import and_, insert, select, func, text
 from sqlalchemy.orm import selectinload
 from app.core.db import get_session
 from app.core.config import settings
@@ -15,6 +16,7 @@ from app.core.taxonomy import get_taxonomy
 from app.models.models import Item, ItemSuggestionAudit, ItemImage
 from app.services.features import load_features
 from app.services import llm as llm_service
+from app.services.llm.types import PairingCandidate, SuggestItemPairingsInput
 from app.services.llm.types import SuggestItemAttributesInput
 from app.storage.r2 import presign_put, object_url, presign_get, r2_client, R2_BUCKET
 from app.storage.keys import original_key
@@ -29,6 +31,9 @@ from app.schemas.schemas import (
     ItemWearLogIn,
     ItemWearLogOut,
     ItemWearLogDeleteIn,
+    ItemPairingRequest,
+    ItemPairingResponse,
+    ItemPairingSuggestion,
     SuggestAttributesIn,
     SuggestAttributesOut,
     SuggestDraft,
@@ -64,6 +69,8 @@ TAG_SOURCE_FIELDS = {
     "event_tags": "event_tags",
     "season_tags": "season_tags",
 }
+PAIRING_CATEGORIES = {"top", "bottom"}
+MAX_PAIRING_LIMIT = 30
 
 def _apply_updates(item: Item, data: Dict[str, Any], category_hint: Optional[str]) -> None:
     if "kind" in data and data["kind"]:
@@ -116,6 +123,166 @@ def _update_attribute_sources(
         sources[api_field] = {"source": source, "updated_at": now}
     if sources:
         item.attribute_sources = sources
+
+
+def _pairing_key_for_category(category: str) -> str:
+    if category not in PAIRING_CATEGORIES:
+        raise ValueError("unsupported_category")
+    return "bottom" if category == "top" else "top"
+
+
+def _normalize_pairing_list(raw: list[dict]) -> list[dict]:
+    cleaned = []
+    seen: set[str] = set()
+    for entry in raw or []:
+        item_id = str(entry.get("item_id") or "").strip()
+        if not item_id or item_id in seen:
+            continue
+        try:
+            score = float(entry.get("score", 0))
+        except Exception:
+            score = 0.0
+        score = max(0.0, min(score, 100.0))
+        if score < settings.PAIRING_MIN_SCORE:
+            continue
+        cleaned.append({"item_id": item_id, "score": score})
+        seen.add(item_id)
+    cleaned.sort(key=lambda x: x["score"], reverse=True)
+    return cleaned
+
+
+def _upsert_pairing_entry(entries: list[dict], item_id: str, score: float) -> list[dict]:
+    updated = False
+    for entry in entries:
+        if entry.get("item_id") == item_id:
+            entry["score"] = max(0.0, min(float(score), 100.0))
+            updated = True
+            break
+    if not updated:
+        entries.append({"item_id": item_id, "score": max(0.0, min(float(score), 100.0))})
+    return _normalize_pairing_list(entries)
+
+
+def _build_item_attributes(item: Item) -> dict:
+    return {
+        "id": str(item.id),
+        "category": item.category,
+        "kind": item.kind,
+        "status": item.status,
+        "type": item.item_type,
+        "fit": item.fit,
+        "fabric_kind": item.fabric_kind,
+        "pattern": item.pattern,
+        "tone": item.tone,
+        "layer_role": item.layer_role,
+        "name": item.name,
+        "brand": item.brand,
+        "base_color": item.base_color,
+        "material": item.material,
+        "warmth": item.warmth,
+        "formality": item.formality,
+        "style_tags": item.style_tags or [],
+        "event_tags": item.event_tags or [],
+        "season_tags": item.season_tags or [],
+    }
+
+
+def _build_attribute_sources(item: Item) -> dict:
+    sources = item.attribute_sources or {}
+    out: dict[str, dict[str, float | str]] = {}
+    for field, meta in sources.items():
+        src = meta.get("source") if isinstance(meta, dict) else None
+        if src == "user":
+            confidence = 1.0
+        elif src == "suggested":
+            confidence = 0.6
+        else:
+            confidence = 0.8
+        out[field] = {"source": src or "unknown", "confidence": confidence}
+    return out
+
+
+async def _remove_item_from_all_pairings(session: AsyncSession, user_id: str, item_id: str) -> None:
+    res = await session.execute(select(Item).where(Item.user_id == user_id, Item.id != item_id))
+    items = res.scalars().all()
+    for other in items:
+        data = other.pairing_suggestions or {}
+        if not data:
+            continue
+        changed = False
+        for key in ("top", "bottom"):
+            if key not in data:
+                continue
+            before = data.get(key) or []
+            after = [entry for entry in before if entry.get("item_id") != item_id]
+            if len(after) != len(before):
+                data[key] = after
+                changed = True
+        if changed:
+            other.pairing_suggestions = data
+
+
+async def _acquire_pairing_lock(session: AsyncSession, item_id: UUID) -> None:
+    lock_id = int.from_bytes(item_id.bytes, "big") % (2**63 - 1)
+    await session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
+
+
+async def _compute_pairings_for_item(
+    session: AsyncSession,
+    item: Item,
+    *,
+    limit: int,
+) -> list[dict]:
+    if item.category not in PAIRING_CATEGORIES:
+        return []
+    target_category = _pairing_key_for_category(item.category)
+    res = await session.execute(
+        select(Item).where(
+            Item.user_id == item.user_id,
+            Item.category == target_category,
+            Item.status == "active",
+            Item.id != item.id,
+        )
+    )
+    candidates = res.scalars().all()
+    if not candidates:
+        item.pairing_suggestions = {target_category: []}
+        return []
+    llm_payload = SuggestItemPairingsInput(
+        base_item={
+            "item_id": str(item.id),
+            "attributes": _build_item_attributes(item),
+            "attribute_sources": _build_attribute_sources(item),
+        },
+        candidates=[
+            PairingCandidate(
+                item_id=str(c.id),
+                attributes=_build_item_attributes(c),
+                attribute_sources=_build_attribute_sources(c),
+            )
+            for c in candidates
+        ],
+        limit=limit,
+    )
+    llm_out = await llm_service.suggest_item_pairings(llm_payload)
+    candidate_map = {str(c.id): c for c in candidates}
+    suggestions = []
+    for s in llm_out.suggestions:
+        if s.item_id not in candidate_map:
+            continue
+        suggestions.append({"item_id": s.item_id, "score": max(0.0, min(float(s.score), 100.0))})
+    suggestions = _normalize_pairing_list(suggestions)
+    item.pairing_suggestions = {target_category: suggestions}
+    await _remove_item_from_all_pairings(session, str(item.user_id), str(item.id))
+    for entry in suggestions:
+        other = candidate_map.get(entry["item_id"])
+        if not other:
+            continue
+        data = other.pairing_suggestions or {}
+        existing = data.get(item.category, [])
+        data[item.category] = _upsert_pairing_entry(existing, str(item.id), entry["score"])
+        other.pairing_suggestions = data
+    return suggestions
 
 def _tag_error(category: str, tag: str, reason: str) -> HTTPException:
     return HTTPException(
@@ -286,6 +453,66 @@ async def item_usage(
         "last_worn_at": str(last_worn) if last_worn else None,
         "wear_count": int((count_outfit or 0) + (count_item or 0)),
     }
+
+
+@router.post("/{item_id}/pairings", response_model=ItemPairingResponse)
+async def item_pairings(
+    item_id: UUID,
+    payload: ItemPairingRequest,
+    session: AsyncSession = Depends(get_session),
+    user_id: str = Depends(get_current_user_id),
+):
+    item = await session.get(Item, item_id)
+    if not item or str(item.user_id) != str(user_id):
+        raise HTTPException(status_code=404, detail="item_not_found")
+    if item.category not in PAIRING_CATEGORIES:
+        raise HTTPException(status_code=400, detail="pairing_not_supported")
+    limit = max(1, min(int(payload.limit or 10), MAX_PAIRING_LIMIT))
+    target_category = _pairing_key_for_category(item.category)
+    cached_list = (item.pairing_suggestions or {}).get(target_category)
+    if cached_list is not None:
+        cached = _normalize_pairing_list(cached_list)
+        return ItemPairingResponse(
+            item_id=str(item.id),
+            category=item.category,
+            cached=True,
+            suggestions=[ItemPairingSuggestion(**s) for s in cached[:limit]],
+        )
+
+    await _acquire_pairing_lock(session, item.id)
+    refreshed = await session.get(Item, item_id)
+    if refreshed:
+        item = refreshed
+    cached_list = (item.pairing_suggestions or {}).get(target_category)
+    if cached_list is not None:
+        cached = _normalize_pairing_list(cached_list)
+        return ItemPairingResponse(
+            item_id=str(item.id),
+            category=item.category,
+            cached=True,
+            suggestions=[ItemPairingSuggestion(**s) for s in cached[:limit]],
+        )
+
+    try:
+        suggestions = await _compute_pairings_for_item(session, item, limit=limit)
+    except asyncio.TimeoutError:
+        cached_list = (item.pairing_suggestions or {}).get(target_category)
+        if cached_list is not None:
+            cached = _normalize_pairing_list(cached_list)
+            return ItemPairingResponse(
+                item_id=str(item.id),
+                category=item.category,
+                cached=True,
+                suggestions=[ItemPairingSuggestion(**s) for s in cached[:limit]],
+            )
+        raise HTTPException(status_code=504, detail="llm_timeout")
+    await session.commit()
+    return ItemPairingResponse(
+        item_id=str(item.id),
+        category=item.category,
+        cached=False,
+        suggestions=[ItemPairingSuggestion(**s) for s in suggestions[:limit]],
+    )
 
 
 @router.post("/{item_id}/wear-log", response_model=ItemWearLogOut)
@@ -472,6 +699,19 @@ async def update_item(
     category_hint = data.get("category") or item.category
     _apply_updates(item, data, category_hint)
     _update_attribute_sources(item, data, before, ATTRIBUTE_SOURCE_FIELDS, source_overrides)
+    attributes_changed = any(before[field] != getattr(item, field) for field in ATTRIBUTE_SOURCE_FIELDS.values())
+    was_pairable = before.get("category") in PAIRING_CATEGORIES
+    now_pairable = item.category in PAIRING_CATEGORIES
+    if attributes_changed and (was_pairable or now_pairable):
+        item.pairing_suggestions = None
+        if now_pairable and settings.LLM_ENABLED:
+            await _acquire_pairing_lock(session, item.id)
+            try:
+                await _compute_pairings_for_item(session, item, limit=MAX_PAIRING_LIMIT)
+            except asyncio.TimeoutError:
+                logger.warning("pairings: llm timeout item_id=%s", item.id)
+        else:
+            await _remove_item_from_all_pairings(session, str(user_id), str(item.id))
 
     await session.commit()
     await session.refresh(item)
@@ -489,6 +729,7 @@ async def delete_item(
         raise HTTPException(status_code=404, detail="item_not_found")
     if item.user_id and str(item.user_id) != str(user_id):
         raise HTTPException(status_code=403, detail="forbidden")
+    await _remove_item_from_all_pairings(session, str(user_id), str(item.id))
     await session.delete(item)
     await session.commit()
     return None
@@ -559,6 +800,7 @@ def _build_item_out(item: Item) -> ItemOut:
         kind=item.kind,
         status=item.status,
         attribute_sources=item.attribute_sources,
+        pairing_suggestions=item.pairing_suggestions,
         category=item.category,
         type=item.item_type,
         fit=item.fit,
@@ -738,6 +980,16 @@ async def patch_item_tags(
             "season_tags": season_existing,
         }
         _update_attribute_sources(item, updates, before, TAG_SOURCE_FIELDS)
+        if item.category in PAIRING_CATEGORIES:
+            item.pairing_suggestions = None
+            if settings.LLM_ENABLED:
+                await _acquire_pairing_lock(session, item.id)
+                try:
+                    await _compute_pairings_for_item(session, item, limit=MAX_PAIRING_LIMIT)
+                except asyncio.TimeoutError:
+                    logger.warning("pairings: llm timeout item_id=%s", item.id)
+            else:
+                await _remove_item_from_all_pairings(session, str(user_id), str(item.id))
     await session.commit()
     await session.refresh(item)
 

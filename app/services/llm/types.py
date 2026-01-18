@@ -49,3 +49,37 @@ class ExplainOutfitOutput(BaseModel):
     explanations: List[str] = Field(default_factory=list)
     tiebreak: Optional[str] = None
     usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
+class PairingCandidate(BaseModel):
+    item_id: str
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+    attribute_sources: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SuggestItemPairingsInput(BaseModel):
+    base_item: Dict[str, Any] = Field(default_factory=dict)
+    candidates: List[PairingCandidate] = Field(default_factory=list)
+    limit: int = 10
+    prompt_version: str = "p1"
+
+
+class PairingSuggestionOut(BaseModel):
+    item_id: str
+    score: float
+
+
+class SuggestItemPairingsOutput(BaseModel):
+    suggestions: List[PairingSuggestionOut] = Field(default_factory=list)
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
+class AskUserItemsInput(BaseModel):
+    question: str
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    prompt_version: str = "p1"
+
+
+class AskUserItemsOutput(BaseModel):
+    answer: str = ""
+    usage: LLMUsage = Field(default_factory=LLMUsage)

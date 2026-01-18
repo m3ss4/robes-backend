@@ -61,6 +61,7 @@ class ItemOut(BaseModel):
     kind: str
     status: Optional[str] = "active"
     attribute_sources: Optional[Dict[str, Dict[str, Any]]] = None
+    pairing_suggestions: Optional[Dict[str, Any]] = None
     category: Optional[str] = None
     type: Optional[str] = Field(None, alias="type")
     fit: Optional[str] = None
@@ -205,6 +206,31 @@ class ItemWearLogOut(BaseModel):
 class ItemWearLogDeleteIn(BaseModel):
     deleted: Optional[bool] = None
     source: Optional[str] = None
+
+
+class ItemPairingRequest(BaseModel):
+    limit: Optional[int] = 10
+
+
+class ItemPairingSuggestion(BaseModel):
+    item_id: str
+    score: float
+
+
+class ItemPairingResponse(BaseModel):
+    item_id: str
+    category: str
+    cached: bool = False
+    suggestions: List[ItemPairingSuggestion]
+
+
+class AskUserItemsIn(BaseModel):
+    question: str
+
+
+class AskUserItemsOut(BaseModel):
+    answer: str
+    usage: Dict[str, Any]
 
 
 class ScoreRequest(BaseModel):

@@ -25,6 +25,7 @@ class Item(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
     attribute_sources: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    pairing_suggestions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     category: Mapped[str | None] = mapped_column(String(32), nullable=True)
     item_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     fit: Mapped[str | None] = mapped_column(String(64), nullable=True)
