@@ -34,7 +34,14 @@ class SuggestDraft(BaseModel):
                 f.confidence = max(f.confidence, 0.99)
 
 
+class SuggestAmbiguity(BaseModel):
+    clip_family_ambiguous: bool = False
+    clip_pattern_ambiguous: bool = False
+
+
 class LLMRequest(BaseModel):
     features: Dict[str, object] = Field(default_factory=dict)
     hints: Dict[str, object] = Field(default_factory=dict)
     lock_fields: List[str] = Field(default_factory=list)
+    ambiguity: SuggestAmbiguity = Field(default_factory=SuggestAmbiguity)
+    image_url: Optional[str] = None

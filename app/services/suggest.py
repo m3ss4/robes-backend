@@ -6,7 +6,7 @@ import time
 from typing import Dict, List
 
 from app.llm.base import ProviderRegistry
-from app.llm.types import LLMRequest, SuggestDraft
+from app.llm.types import LLMRequest, SuggestDraft, SuggestAmbiguity
 from app.core.cache import cache_json_get, cache_json_set
 
 CACHE_TTL = int(os.getenv("LLM_CACHE_TTL_SECONDS", "86400"))
@@ -19,14 +19,27 @@ def _hash_features(features: Dict, hints: Dict) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-async def suggest_with_provider(features: Dict, hints: Dict, lock_fields: List[str]) -> tuple[SuggestDraft, Dict]:
+async def suggest_with_provider(
+    features: Dict,
+    hints: Dict,
+    lock_fields: List[str],
+    *,
+    ambiguity: SuggestAmbiguity | None = None,
+    image_url: str | None = None,
+) -> tuple[SuggestDraft, Dict]:
     cache_key = f"suggest:{_hash_features(features, hints)}"
     cached = await cache_json_get(cache_key)
     if cached:
         return SuggestDraft.model_validate(cached), {"cached": True, "provider": PROVIDER_NAME, "latency_ms": 0, "tokens": 0}
 
     provider = ProviderRegistry.get(PROVIDER_NAME)
-    req = LLMRequest(features=features, hints=hints, lock_fields=lock_fields)
+    req = LLMRequest(
+        features=features,
+        hints=hints,
+        lock_fields=lock_fields,
+        ambiguity=ambiguity or SuggestAmbiguity(),
+        image_url=image_url,
+    )
     start = time.perf_counter()
     try:
         draft = await asyncio.wait_for(provider.suggest(req, timeout_ms=TIMEOUT_MS), timeout=TIMEOUT_MS / 1000.0 + 0.1)

@@ -16,8 +16,9 @@ from app.core.taxonomy import get_taxonomy
 from app.models.models import Item, ItemSuggestionAudit, ItemImage
 from app.services.features import load_features
 from app.services import llm as llm_service
+from app.services.suggest import suggest_with_provider
+from app.llm.types import SuggestAmbiguity
 from app.services.llm.types import PairingCandidate, SuggestItemPairingsInput
-from app.services.llm.types import SuggestItemAttributesInput
 from app.storage.r2 import presign_put, object_url, presign_get, r2_client, R2_BUCKET
 from app.storage.keys import original_key
 from pydantic import BaseModel, field_validator
@@ -70,6 +71,35 @@ TAG_SOURCE_FIELDS = {
     "season_tags": "season_tags",
 }
 PAIRING_CATEGORIES = {"top", "bottom"}
+
+TYPE_TO_CATEGORY = {
+    "tshirt": "top",
+    "shirt": "top",
+    "blouse": "top",
+    "knit": "top",
+    "hoodie": "top",
+    "sweatshirt": "top",
+    "polo": "top",
+    "tank": "top",
+    "jeans": "bottom",
+    "trousers": "bottom",
+    "chinos": "bottom",
+    "shorts": "bottom",
+    "skirt": "bottom",
+    "dress": "onepiece",
+    "jumpsuit": "onepiece",
+    "jacket": "outerwear",
+    "coat": "outerwear",
+    "blazer": "outerwear",
+    "raincoat": "outerwear",
+    "puffer": "outerwear",
+    "gilet": "outerwear",
+    "sneakers": "footwear",
+    "boots": "footwear",
+    "loafers": "footwear",
+    "heels": "footwear",
+    "sandals": "footwear",
+}
 MAX_PAIRING_LIMIT = 30
 
 def _apply_updates(item: Item, data: Dict[str, Any], category_hint: Optional[str]) -> None:
@@ -1106,17 +1136,24 @@ async def confirm_image(
 
 def _default_draft(hints: Dict[str, Any], features: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     # Category/family
-    category = hints.get("category") or features.get("category") or (features.get("clip_family") if (features.get("clip_family_p") or 0) >= 0.5 else None)
     base_color = hints.get("base_color") or features.get("base_color") or None
     # Type: prefer hint, then clip with confidence gate, then heuristics
     type_guess = hints.get("type") or (
         features.get("clip_type") if (features.get("clip_type_p") or 0) >= settings.SUGGEST_TYPE_MIN_P else None
     ) or features.get("type") or None
+    category = hints.get("category") or (TYPE_TO_CATEGORY.get(type_guess) if type_guess else None)
+    if not category and (features.get("clip_family_p") or 0) >= 0.5:
+        category = features.get("clip_family")
+    if not category and features.get("category"):
+        category = features.get("category")
     tone = hints.get("tone") or features.get("tone") or ("cool" if base_color in {"navy", "blue", "black", "gray"} else "warm")
     # Pattern: heuristics first, then clip
     pattern_guess = hints.get("pattern") or features.get("pattern")
     if not pattern_guess and (features.get("clip_pattern_p") or 0) >= settings.SUGGEST_PATTERN_MIN_P:
         pattern_guess = features.get("clip_pattern")
+    if pattern_guess == "stripe" and features.get("clip_pattern") in {"graphic"}:
+        if (features.get("clip_pattern_p") or 0) >= 0.22:
+            pattern_guess = features.get("clip_pattern")
     base_conf = 0.9 if features.get("base_color") else (0.9 if "base_color" in hints else 0.0)
     tone_conf = 0.8 if features.get("tone") else 0.6
     pattern_conf = features.get("pattern_confidence", 0.0)
@@ -1131,7 +1168,16 @@ def _default_draft(hints: Dict[str, Any], features: Dict[str, Any]) -> Dict[str,
         "pattern": "contrast heuristic" if features.get("pattern") else "unsure",
         "formality": "priors from type/pattern/color",
     }
-    cat_source = "hint" if hints.get("category") else ("vision" if features.get("category") else "clip" if features.get("clip_family") else "rule")
+    if hints.get("category"):
+        cat_source = "hint"
+    elif TYPE_TO_CATEGORY.get(type_guess):
+        cat_source = "rule"
+    elif features.get("clip_family"):
+        cat_source = "clip"
+    elif features.get("category"):
+        cat_source = "vision"
+    else:
+        cat_source = "rule"
     type_source = (
         "hint"
         if hints.get("type")
@@ -1311,19 +1357,21 @@ async def suggest_attributes(
     # Optional LLM enrichment
     llm_meta = {}
     if settings.LLM_ENABLED:
-        llm_payload = SuggestItemAttributesInput(
-            taxonomy=get_taxonomy()["facets"],
-            features=features if features.get("ok") else {},
-            current=hints,
-            locked=list(lock_fields),
-            allow_vision=bool(payload.use_vision and settings.LLM_USE_VISION),
-            image_url=payload.image_url if (payload.use_vision and settings.LLM_USE_VISION) else None,
-            prompt_version="p1",
+        features_ok = bool(features.get("ok"))
+        ambiguity = SuggestAmbiguity(
+            clip_family_ambiguous=(not features_ok) or (float(features.get("clip_family_p") or 0.0) < settings.SUGGEST_TYPE_MIN_P),
+            clip_pattern_ambiguous=(not features_ok) or (float(features.get("clip_pattern_p") or 0.0) < settings.SUGGEST_PATTERN_MIN_P),
         )
+        image_url = payload.image_url if (payload.use_vision and settings.LLM_USE_VISION) else None
         try:
-            llm_out = await llm_service.suggest_item_attributes(llm_payload)
-            llm_meta = llm_out.usage.model_dump()
-            draft_data = _merge_llm_suggestions(draft_data, llm_out.suggestions, lock_fields)
+            llm_draft, llm_meta = await suggest_with_provider(
+                features if features_ok else {},
+                hints,
+                list(lock_fields),
+                ambiguity=ambiguity,
+                image_url=image_url,
+            )
+            draft_data = _merge_llm_suggestions(draft_data, llm_draft.model_dump(), lock_fields)
             draft_data = _normalize_draft_fields(draft_data)
         except Exception as e:
             logger.warning("suggest-attributes: llm enrichment failed reason=%s", e)
@@ -1337,8 +1385,8 @@ async def suggest_attributes(
         draft=merged.model_dump(by_alias=True),
         latency_ms=latency_ms,
         llm_used=True if llm_meta else False,
-        llm_tokens=llm_meta.get("tokens_out") if llm_meta else 0,
-        provider=llm_meta.get("model") if llm_meta else None,
+        llm_tokens=llm_meta.get("tokens") if llm_meta else 0,
+        provider=llm_meta.get("provider") if llm_meta else None,
         user_id=user_id,
     )
     session.add(audit)
