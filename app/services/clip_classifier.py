@@ -44,11 +44,55 @@ def _encode_image(model, preprocess, img: Image.Image) -> torch.Tensor:
 
 
 _FAMILY_LABELS = ["top", "bottom", "onepiece", "outerwear", "footwear", "accessory", "underlayer"]
-_FAMILY_PROMPTS = [f"a photo of a {_} garment" for _ in _FAMILY_LABELS]
+_FAMILY_PROMPTS_MAP: Dict[str, List[str]] = {
+    "top": [
+        "a photo of a top",
+        "a photo of a t-shirt",
+        "a photo of a shirt",
+        "a photo of a blouse",
+        "a photo of a tank top",
+    ],
+    "bottom": [
+        "a photo of pants",
+        "a photo of trousers",
+        "a photo of jeans",
+        "a photo of shorts",
+        "a photo of a skirt",
+    ],
+    "onepiece": [
+        "a photo of a dress",
+        "a photo of a one-piece outfit",
+        "a photo of a jumpsuit",
+    ],
+    "outerwear": [
+        "a photo of a jacket",
+        "a photo of a coat",
+        "a photo of a blazer",
+    ],
+    "footwear": [
+        "a photo of shoes",
+        "a photo of sneakers",
+        "a photo of boots",
+        "a photo of heels",
+    ],
+    "accessory": [
+        "a photo of a bag",
+        "a photo of a belt",
+        "a photo of a scarf",
+        "a photo of a hat",
+    ],
+    "underlayer": [
+        "a photo of underwear",
+        "a photo of a bra",
+        "a photo of an undershirt",
+    ],
+}
 
 _TYPE_PROMPTS: Dict[str, List[Tuple[str, str]]] = {
     "top": [
-        ("tshirt", "a short sleeve t-shirt"),
+        ("tshirt", "a short sleeve crew neck t-shirt"),
+        ("tshirt", "a plain t-shirt laid flat"),
+        ("tshirt", "a cotton jersey t-shirt"),
         ("shirt", "a button up shirt"),
         ("blouse", "a blouse"),
         ("knit", "a knit sweater"),
@@ -155,9 +199,23 @@ def classify_image(img: Image.Image, family_hint: str | None = None) -> Dict[str
     img_emb = _encode_image(model, preprocess, img)
 
     # Family
-    fam_txt = _encode_text(model, tokenizer, _FAMILY_PROMPTS)
+    prompt_labels: list[str] = []
+    prompt_texts: list[str] = []
+    for label in _FAMILY_LABELS:
+        prompts = _FAMILY_PROMPTS_MAP.get(label, [])
+        for prompt in prompts:
+            prompt_labels.append(label)
+            prompt_texts.append(prompt)
+    fam_txt = _encode_text(model, tokenizer, prompt_texts)
     fam_logits = (model.logit_scale.exp() * img_emb @ fam_txt.T).squeeze(0)
-    fam_probs = _softmax(fam_logits).cpu().tolist()
+    label_logits: Dict[str, list[float]] = {label: [] for label in _FAMILY_LABELS}
+    for idx, label in enumerate(prompt_labels):
+        label_logits[label].append(float(fam_logits[idx]))
+    fam_scores = []
+    for label in _FAMILY_LABELS:
+        scores = label_logits.get(label) or [float("-inf")]
+        fam_scores.append(sum(scores) / len(scores))
+    fam_probs = _softmax(torch.tensor(fam_scores)).cpu().tolist()
     fam_idx = int(torch.tensor(fam_probs).argmax())
     fam_label = _FAMILY_LABELS[fam_idx]
     fam_p = fam_probs[fam_idx]
@@ -171,17 +229,24 @@ def classify_image(img: Image.Image, family_hint: str | None = None) -> Dict[str
     # Type
     type_prompts = _TYPE_PROMPTS.get(family, _TYPE_PROMPTS.get(fam_label, []))
     if family_hint is None and (fam_p < 0.80 or fam_margin < 0.15):
-        type_prompts = (_TYPE_PROMPTS.get("bottom", []) + _TYPE_PROMPTS.get("onepiece", []))
+        type_prompts = (
+            _TYPE_PROMPTS.get("top", [])
+            + _TYPE_PROMPTS.get("bottom", [])
+            + _TYPE_PROMPTS.get("onepiece", [])
+            + _TYPE_PROMPTS.get("outerwear", [])
+        )
     type_out = {"clip_type": None, "clip_type_p": 0.0, "clip_type_top3": []}
     if type_prompts:
         labels, prompts = zip(*type_prompts)
         probs = _clip_type_probs(img_emb, model, tokenizer, list(labels), list(prompts))
-        probs_tensor = torch.tensor([p[1] for p in probs])
-        topk = min(3, len(labels))
-        vals, idxs = torch.topk(probs_tensor, topk)
-        type_out["clip_type_top3"] = [(probs[i][0], float(vals[j])) for j, i in enumerate(idxs.tolist())]
-        type_out["clip_type"] = probs[idxs[0].item()][0]
-        type_out["clip_type_p"] = float(vals[0])
+        label_scores: Dict[str, float] = {}
+        for label, score in probs:
+            label_scores[label] = max(label_scores.get(label, 0.0), float(score))
+        ranked_labels = sorted(label_scores.items(), key=lambda x: x[1], reverse=True)
+        type_out["clip_type_top3"] = ranked_labels[:3]
+        if ranked_labels:
+            type_out["clip_type"] = ranked_labels[0][0]
+            type_out["clip_type_p"] = float(ranked_labels[0][1])
         if debug:
             logger.info(
                 "clip:family=%s fam_p=%.3f margin=%.3f type_labels=%s top3=%s",
@@ -256,12 +321,23 @@ def classify_image(img: Image.Image, family_hint: str | None = None) -> Dict[str
                 pat_val = _PATTERN_MAP.get(label, label)
                 break
 
+    type_top3 = type_out.get("clip_type_top3") or []
+    type_margin = None
+    if len(type_top3) > 1:
+        type_margin = float(type_top3[0][1] - type_top3[1][1])
+
     return {
         "clip_family": family,
+        "clip_family_raw": fam_label,
+        "clip_family_used": family,
         "clip_family_p": float(fam_p),
+        "clip_family_top2": [(fam_label, float(fam_p)), (top2_label, float(top2_prob))],
+        "clip_family_margin": float(fam_margin),
         "clip_type": type_out.get("clip_type"),
         "clip_type_p": type_out.get("clip_type_p"),
-        "clip_type_top3": type_out.get("clip_type_top3"),
+        "clip_type_top3": type_top3,
+        "clip_type_top2": type_top3[:2],
+        "clip_type_margin": type_margin,
         "clip_pattern": pat_val,
         "clip_pattern_p": float(p_vals[0]),
         "clip_pattern_top3": pattern_top3,

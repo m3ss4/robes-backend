@@ -117,6 +117,37 @@ class Outfit(Base):
     items: Mapped[list["OutfitItem"]] = relationship("OutfitItem", back_populates="outfit", cascade="all, delete-orphan", lazy="selectin")
 
 
+class OutfitPhoto(Base):
+    __tablename__ = "outfit_photo"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    bucket: Mapped[str | None] = mapped_column(Text, nullable=True)
+    key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class OutfitPhotoAnalysis(Base):
+    __tablename__ = "outfit_photo_analysis"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    outfit_photo_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("outfit_photo.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    method: Mapped[str] = mapped_column(Text, default="clip_embed_v1")
+    candidates_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    matched_items_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    matched_outfit_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    warnings_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    debug_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class OutfitItem(Base):
     __tablename__ = "outfit_item"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

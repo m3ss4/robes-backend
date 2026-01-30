@@ -226,13 +226,19 @@ def extract_features(image_url: Optional[str], image_b64: Optional[str]) -> Dict
     pattern_source = "vision"
     # Heuristic pattern overrides
     if solid_dom >= settings.SOLID_DOMINANCE_THR and edge_density < settings.EDGE_DENSITY_THR:
-        pattern, pattern_conf, pattern_source = "solid", 0.9, "solid_heuristic"
+        pattern, pattern_conf, pattern_source = "solid", solid_dom, "solid_heuristic"
     elif stripe_score >= settings.STRIPE_THR and stripe_score > plaid_score:
-        pattern, pattern_conf, pattern_source = "stripe", 0.7, "stripe_heuristic"
+        pattern, pattern_conf, pattern_source = "stripe", stripe_score, "stripe_heuristic"
     elif plaid_score >= settings.PLAID_THR:
-        pattern, pattern_conf, pattern_source = "plaid", 0.65, "plaid_heuristic"
-    elif dot_score >= settings.DOT_THR:
-        pattern, pattern_conf, pattern_source = "polka_dot", 0.6, "dot_heuristic"
+        pattern, pattern_conf, pattern_source = "plaid", plaid_score, "plaid_heuristic"
+    elif dot_score >= settings.DOT_THR and edge_density >= settings.MIN_EDGES_FOR_PATTERN:
+        pattern, pattern_conf, pattern_source = "polka_dot", dot_score, "dot_heuristic"
+
+    max_geom = max(stripe_score, plaid_score, dot_score)
+    if edge_density < settings.MIN_EDGES_FOR_PATTERN and max_geom < settings.PATTERN_MIN_SCORE:
+        pattern, pattern_conf, pattern_source = "solid", max(solid_dom, 0.3), "low_texture_assume_solid"
+    elif max_geom < settings.PATTERN_MIN_SCORE:
+        pattern, pattern_conf, pattern_source = "solid", max(solid_dom, 0.25), "low_pattern_signal"
 
     aspect = img.width / img.height if img.height else 1
     edges = edge_density

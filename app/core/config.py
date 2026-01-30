@@ -31,15 +31,25 @@ class Settings(BaseSettings):
     IMGPROC_FEATURES_VERSION: str = "v1"
     IMGPROC_EMBEDDINGS: str = "clip"
     CLIP_MODEL: str = "ViT-B-32"
+    CLIP_PRETRAINED: str = "laion2b_s34b_b79k"
+    CLIP_CHECKPOINT_PATH: Optional[str] = None
     # Suggestion thresholds
     SUGGEST_TYPE_MIN_P: float = 0.60
     SUGGEST_PATTERN_MIN_P: float = 0.55
+    SUGGEST_FAMILY_MIN_P: float = 0.60
     SOLID_DOMINANCE_THR: float = 0.65
     EDGE_DENSITY_THR: float = 0.12
     STRIPE_THR: float = 0.08
     PLAID_THR: float = 0.05
     DOT_THR: float = 0.04
+    PATTERN_MIN_SCORE: float = 0.25
+    MIN_EDGES_FOR_PATTERN: float = 0.03
     PAIRING_MIN_SCORE: float = 25.0
+    # Outfit photo matching
+    OUTFIT_PHOTO_TOPK_IMAGES: int = 30
+    OUTFIT_PHOTO_TOPN_ITEMS: int = 8
+    OUTFIT_PHOTO_MATCH_MIN_SIM: float = 0.30
+    OUTFIT_PHOTO_MAX_PER_SLOT: int = 1
 
     @property
     def cors_origin_list(self) -> List[str]:

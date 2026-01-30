@@ -1137,28 +1137,37 @@ async def confirm_image(
 def _default_draft(hints: Dict[str, Any], features: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     # Category/family
     base_color = hints.get("base_color") or features.get("base_color") or None
-    # Type: prefer hint, then clip with confidence gate, then heuristics
-    type_guess = hints.get("type") or (
-        features.get("clip_type") if (features.get("clip_type_p") or 0) >= settings.SUGGEST_TYPE_MIN_P else None
-    ) or features.get("type") or None
-    category = hints.get("category") or (TYPE_TO_CATEGORY.get(type_guess) if type_guess else None)
-    if not category and (features.get("clip_family_p") or 0) >= 0.5:
+    # Type: prefer hint or clip above threshold; no vision heuristic fallback
+    clip_type_ok = (features.get("clip_type_p") or 0) >= settings.SUGGEST_TYPE_MIN_P
+    type_guess = hints.get("type") or (features.get("clip_type") if clip_type_ok else None)
+    type_source = "hint" if hints.get("type") else ("clip" if type_guess else "sanity")
+    # Category: derive from trusted type, or fall back to CLIP family if strong enough
+    if hints.get("category"):
+        category = hints.get("category")
+    elif type_guess and type_source in {"clip", "hint", "locked", "user", "rule"}:
+        category = TYPE_TO_CATEGORY.get(type_guess)
+    elif (features.get("clip_family_p") or 0) >= settings.SUGGEST_FAMILY_MIN_P:
         category = features.get("clip_family")
-    if not category and features.get("category"):
-        category = features.get("category")
+    else:
+        category = None
     tone = hints.get("tone") or features.get("tone") or ("cool" if base_color in {"navy", "blue", "black", "gray"} else "warm")
     # Pattern: heuristics first, then clip
     pattern_guess = hints.get("pattern") or features.get("pattern")
-    if not pattern_guess and (features.get("clip_pattern_p") or 0) >= settings.SUGGEST_PATTERN_MIN_P:
-        pattern_guess = features.get("clip_pattern")
-    if pattern_guess == "stripe" and features.get("clip_pattern") in {"graphic"}:
-        if (features.get("clip_pattern_p") or 0) >= 0.22:
-            pattern_guess = features.get("clip_pattern")
+    clip_pattern_p = features.get("clip_pattern_p") or 0.0
+    clip_pattern = features.get("clip_pattern")
+    if not pattern_guess and clip_pattern_p >= settings.SUGGEST_PATTERN_MIN_P:
+        pattern_guess = clip_pattern
+    max_geom = max(features.get("stripe_score") or 0.0, features.get("plaid_score") or 0.0, features.get("dot_score") or 0.0)
+    if max_geom < settings.PATTERN_MIN_SCORE and clip_pattern_p < settings.SUGGEST_PATTERN_MIN_P:
+        pattern_guess = "solid"
+    if pattern_guess == "stripe" and clip_pattern in {"graphic"}:
+        if clip_pattern_p >= 0.22:
+            pattern_guess = clip_pattern
     base_conf = 0.9 if features.get("base_color") else (0.9 if "base_color" in hints else 0.0)
     tone_conf = 0.8 if features.get("tone") else 0.6
     pattern_conf = features.get("pattern_confidence", 0.0)
-    if pattern_guess == features.get("clip_pattern"):
-        pattern_conf = max(pattern_conf, features.get("clip_pattern_p") or 0.0)
+    if pattern_guess == clip_pattern:
+        pattern_conf = max(pattern_conf, clip_pattern_p)
     formality_guess = hints.get("formality") or features.get("formality") or 0.5
     warmth_guess = hints.get("warmth") or features.get("warmth") or 0
     layer_guess = hints.get("layer_role") or ("outer" if warmth_guess >= 2 else "base")
@@ -1170,35 +1179,39 @@ def _default_draft(hints: Dict[str, Any], features: Dict[str, Any]) -> Dict[str,
     }
     if hints.get("category"):
         cat_source = "hint"
-    elif TYPE_TO_CATEGORY.get(type_guess):
+    elif type_guess and type_source in {"clip", "hint", "locked", "user", "rule"}:
         cat_source = "rule"
-    elif features.get("clip_family"):
+    elif category == features.get("clip_family"):
         cat_source = "clip"
-    elif features.get("category"):
-        cat_source = "vision"
     else:
-        cat_source = "rule"
-    type_source = (
-        "hint"
-        if hints.get("type")
-        else ("clip" if type_guess == features.get("clip_type") else "vision" if features.get("type") else "rule")
-    )
+        cat_source = "sanity"
+    type_reason = "type_below_threshold" if not type_guess else None
     pattern_source = (
         "hint"
         if hints.get("pattern")
         else ("clip" if pattern_guess == features.get("clip_pattern") else "vision" if features.get("pattern") else "rule")
     )
 
+    if type_guess in {"tshirt", "tank", "hoodie", "sweatshirt", "knit"}:
+        fabric_kind = {"value": "knit", "confidence": 0.6, "source": "rule"}
+    else:
+        fabric_kind = {"value": None, "confidence": 0.0, "source": "rule"}
+
     draft: Dict[str, Dict[str, Any]] = {
         "category": {"value": category, "confidence": 0.9 if "category" in hints else (0.7 if category else 0.0), "source": cat_source},
-        "type": {"value": type_guess, "confidence": max(0.65 if type_guess else 0.0, features.get("clip_type_p") or 0.0), "source": type_source},
+        "type": {
+            "value": type_guess,
+            "confidence": (features.get("clip_type_p") or 0.0) if type_source == "clip" else (0.9 if type_source == "hint" else 0.0),
+            "source": type_source,
+            "reason": type_reason,
+        },
         "base_color": {"value": base_color, "confidence": base_conf, "source": "color" if features.get("base_color") else "hint" if hints.get("base_color") else "rule", "reason": reasons["base_color"]},
         "tone": {"value": tone, "confidence": tone_conf, "source": "rule", "reason": reasons["tone"]},
         "warmth": {"value": warmth_guess, "confidence": 0.6, "source": "rule"},
         "formality": {"value": formality_guess, "confidence": 0.65, "source": "rule", "reason": reasons["formality"]},
         "layer_role": {"value": layer_guess, "confidence": 0.7, "source": "rule"},
         "pattern": {"value": pattern_guess, "confidence": max(pattern_conf, features.get("clip_pattern_p") or 0.0), "source": pattern_source, "reason": reasons["pattern"]},
-        "fabric_kind": {"value": "woven", "confidence": 0.6, "source": "vision"},
+        "fabric_kind": fabric_kind,
         "material": {"value": "cotton", "confidence": 0.5, "source": "llm"},
         "season_tags": {"value": ["spring", "autumn"], "confidence": 0.5, "source": "llm"},
         "event_tags": {"value": ["casual"], "confidence": 0.5, "source": "llm"},

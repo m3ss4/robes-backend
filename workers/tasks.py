@@ -9,11 +9,13 @@ import requests
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.core.config import settings
-from app.models.models import ItemImage
+from app.models.models import ItemImage, OutfitPhoto
 from app.services.feature_store import compute_sha256
 from app.services import feature_store
+from app.services.outfit_photo_matcher import persist_outfit_photo_analysis
 from workers.vision import extract_features, _open_image
 from app.services.clip_classifier import classify_image
+from app.services.clip_embeddings import embed_image
 
 @celery.task(name="tasks.process_image")
 def process_image(image_b64: str) -> dict:
@@ -72,6 +74,10 @@ def analyze_image(image_id: str) -> dict:
                 feats.update(clip_res)
             except Exception:
                 pass
+            try:
+                emb = embed_image(pil_img)
+            except Exception:
+                emb = None
 
             payload = {
                 "features_version": settings.IMGPROC_FEATURES_VERSION,
@@ -80,6 +86,7 @@ def analyze_image(image_id: str) -> dict:
                 "stripe_score": feats.get("stripe_score"),
                 "plaid_score": feats.get("plaid_score"),
                 "dot_score": feats.get("dot_score"),
+                "embedding": emb,
                 "family_pred": feats.get("clip_family") or feats.get("category"),
                 "family_p": feats.get("clip_family_p"),
                 "type_pred": feats.get("clip_type") or feats.get("type"),
@@ -99,5 +106,26 @@ def analyze_image(image_id: str) -> dict:
                 await session.rollback()
                 return {"ok": False, "error": f"db_upsert_failed:{e}"}
             return {"ok": True, "image_id": str(img.id)}
+
+    return asyncio.run(_run())
+
+
+@celery.task(name="tasks.analyze_outfit_photo")
+def analyze_outfit_photo(outfit_photo_id: str) -> dict:
+    async def _run() -> dict:
+        engine = create_async_engine(settings.DATABASE_URL, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as session:
+            photo = await session.get(OutfitPhoto, outfit_photo_id)
+            if not photo:
+                return {"ok": False, "error": "outfit_photo_not_found"}
+            photo.status = "processing"
+            await session.commit()
+            try:
+                await persist_outfit_photo_analysis(session, photo)
+            except Exception as e:
+                await session.rollback()
+                return {"ok": False, "error": str(e)}
+            return {"ok": True, "outfit_photo_id": outfit_photo_id}
 
     return asyncio.run(_run())

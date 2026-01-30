@@ -11,4 +11,5 @@ celery = Celery("wardrobe_workers", broker=broker, backend=backend, include=["wo
 celery.conf.task_routes = {
     "tasks.process_image": {"queue": "images"},
     "tasks.analyze_image": {"queue": "images"},
+    "tasks.analyze_outfit_photo": {"queue": "images"},
 }
