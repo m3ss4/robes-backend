@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     OUTFIT_MATCH_MIN_SIM: float = 0.22
     OUTFIT_MATCH_MAX_PER_SLOT: int = 20
     OUTFIT_MATCH_MIN_CONFIDENCE: float = 0.75
+    # Growth modules (disabled by default)
+    SEARCH_ENABLED: bool = False
+    RECS_ENABLED: bool = False
+    NOTIFICATIONS_ENABLED: bool = False
 
     @property
     def cors_origin_list(self) -> List[str]:

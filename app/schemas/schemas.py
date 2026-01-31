@@ -70,6 +70,19 @@ from app.schemas.outfit_match import (
     OutfitMatchJobOut,
     OutfitMatchJobListOut,
 )
+from app.schemas.search import (
+    SearchItemsOut,
+    SearchOutfitsOut,
+    SearchHitOut,
+)
+from app.schemas.recs import (
+    RecOut,
+    RecsOut,
+)
+from app.schemas.notifications import (
+    NotificationOut,
+    NotificationsOut,
+)
 
 __all__ = [
     "ItemImageIn",
@@ -130,4 +143,11 @@ __all__ = [
     "PackingCubeItemOut",
     "PackingCubeDetailOut",
     "PackingCubeOwnershipOut",
+    "SearchItemsOut",
+    "SearchOutfitsOut",
+    "SearchHitOut",
+    "RecOut",
+    "RecsOut",
+    "NotificationOut",
+    "NotificationsOut",
 ]

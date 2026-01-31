@@ -4,6 +4,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.routers import health, items, outfits, wear as wear_router, llm as llm_router, outfit_photos as outfit_photos_router, outfit_match as outfit_match_router, packing_cubes as packing_cubes_router
+from app.routers import search as search_router
+from app.routers import recommendations as recommendations_router
+from app.routers import notifications as notifications_router
 from app.routers import tags as tags_router
 from app.routers import taxonomy as taxonomy_router
 from app.routers import auth as auth_router
@@ -37,6 +40,12 @@ app.include_router(llm_router.router, prefix=prefix)
 app.include_router(outfit_photos_router.router, prefix=prefix)
 app.include_router(outfit_match_router.router, prefix=prefix)
 app.include_router(packing_cubes_router.router, prefix=prefix)
+if settings.SEARCH_ENABLED:
+    app.include_router(search_router.router, prefix=prefix)
+if settings.RECS_ENABLED:
+    app.include_router(recommendations_router.router, prefix=prefix)
+if settings.NOTIFICATIONS_ENABLED:
+    app.include_router(notifications_router.router, prefix=prefix)
 
 # LLM providers
 try:
