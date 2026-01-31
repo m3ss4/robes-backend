@@ -16,6 +16,10 @@ from app.services.llm.types import (
     ExplainOutfitInput,
     ExplainOutfitOutput,
     LLMUsage,
+    OutfitItemMatchInput,
+    OutfitItemMatchOutput,
+    OutfitSlotDetectInput,
+    OutfitSlotDetectOutput,
     SuggestItemAttributesInput,
     SuggestItemAttributesOutput,
     SuggestItemPairingsInput,
@@ -121,5 +125,33 @@ async def ask_user_items(payload: AskUserItemsInput) -> AskUserItemsOutput:
 
     provider = _get_provider()
     out = await provider.ask_user_items(payload, timeout_ms=settings.LLM_SUGGEST_TIMEOUT_MS)
+    out.usage.cached = False
+    return out
+
+
+async def detect_outfit_slots(payload: OutfitSlotDetectInput) -> OutfitSlotDetectOutput:
+    payload.prompt_version = payload.prompt_version or PROMPT_VERSION
+    if not settings.LLM_ENABLED or not settings.LLM_USE_VISION:
+        return OutfitSlotDetectOutput(
+            slots=[],
+            missing_count=0,
+            usage=LLMUsage(model="disabled", cached=True, prompt_version=payload.prompt_version),
+        )
+    provider = _get_provider()
+    out = await provider.detect_outfit_slots(payload, timeout_ms=settings.LLM_SUGGEST_TIMEOUT_MS)
+    out.usage.cached = False
+    return out
+
+
+async def match_outfit_items(payload: OutfitItemMatchInput) -> OutfitItemMatchOutput:
+    payload.prompt_version = payload.prompt_version or PROMPT_VERSION
+    if not settings.LLM_ENABLED or not settings.LLM_USE_VISION:
+        return OutfitItemMatchOutput(
+            matches=[],
+            missing_count=0,
+            usage=LLMUsage(model="disabled", cached=True, prompt_version=payload.prompt_version),
+        )
+    provider = _get_provider()
+    out = await provider.match_outfit_items(payload, timeout_ms=settings.LLM_SUGGEST_TIMEOUT_MS)
     out.usage.cached = False
     return out

@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List
+from typing import Dict, List, Any
 
-from app.services.llm.types import ExplainOutfitInput, SuggestItemAttributesInput, SuggestItemPairingsInput, AskUserItemsInput
+from app.services.llm.types import (
+    ExplainOutfitInput,
+    SuggestItemAttributesInput,
+    SuggestItemPairingsInput,
+    AskUserItemsInput,
+    OutfitSlotDetectInput,
+    OutfitItemMatchInput,
+)
 
 
 PROMPT_VERSION = "p1"
@@ -27,6 +34,22 @@ PAIR_SYS = (
 ASK_SYS = (
     "You answer user questions using only the provided item metadata. "
     "Return ONLY JSON: {\"answer\": \"...\"}. If the answer is unknown, say you don't know."
+)
+
+OUTFIT_SLOT_SYS = (
+    "You are analyzing an outfit photo. Identify which clothing slots are visible: "
+    "onepiece, top, bottom, outerwear, footwear, accessory. "
+    "Return ONLY JSON: {\"slots\": [\"...\"], \"missing_count\": 0}. "
+    "If a onepiece is visible, do NOT include top or bottom. "
+    "If unsure, include the plausible slots and set missing_count to 0."
+)
+
+OUTFIT_MATCH_SYS = (
+    "You match the outfit photo to candidate inventory items for a single slot. "
+    "Return ONLY JSON: {\"matches\": [{\"item_id\": \"...\", \"confidence\": 0-1, \"reason\": \"...\"}], "
+    "\"missing_count\": 0}. "
+    "Only include matches if confidence is high; otherwise return an empty matches list. "
+    "Use the outfit photo and candidate images/metadata."
 )
 
 
@@ -82,4 +105,68 @@ def build_ask_items_prompt(payload: AskUserItemsInput) -> List[Dict[str, str]]:
     return [
         {"role": "system", "content": ASK_SYS},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+    ]
+
+
+def build_outfit_slot_prompt(payload: OutfitSlotDetectInput) -> List[Dict[str, Any]]:
+    content = [
+        {
+            "type": "input_text",
+            "text": json.dumps(
+                {
+                    "task": "detect_slots",
+                    "prompt_version": payload.prompt_version or PROMPT_VERSION,
+                },
+                ensure_ascii=False,
+            ),
+        },
+        {"type": "input_image", "image_url": payload.image_url},
+    ]
+    return [
+        {"role": "system", "content": OUTFIT_SLOT_SYS},
+        {"role": "user", "content": content},
+    ]
+
+
+def build_outfit_match_prompt(payload: OutfitItemMatchInput) -> List[Dict[str, Any]]:
+    content: List[Dict[str, Any]] = [
+        {
+            "type": "input_text",
+            "text": json.dumps(
+                {
+                    "task": "match_items",
+                    "slot": payload.slot,
+                    "min_confidence": payload.min_confidence,
+                    "prompt_version": payload.prompt_version or PROMPT_VERSION,
+                },
+                ensure_ascii=False,
+            ),
+        },
+        {"type": "input_image", "image_url": payload.image_url},
+    ]
+    for idx, cand in enumerate(payload.candidates, start=1):
+        content.append(
+            {
+                "type": "input_text",
+                "text": json.dumps(
+                    {
+                        "candidate_index": idx,
+                        "item_id": cand.item_id,
+                        "category": cand.category,
+                        "type": cand.type,
+                        "base_color": cand.base_color,
+                        "pattern": cand.pattern,
+                        "fabric_kind": cand.fabric_kind,
+                        "brand": cand.brand,
+                        "name": cand.name,
+                        "similarity": cand.similarity,
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        )
+        content.append({"type": "input_image", "image_url": cand.image_url})
+    return [
+        {"role": "system", "content": OUTFIT_MATCH_SYS},
+        {"role": "user", "content": content},
     ]

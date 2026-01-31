@@ -7,6 +7,10 @@ from app.services.llm.types import (
     AskUserItemsOutput,
     ExplainOutfitInput,
     ExplainOutfitOutput,
+    OutfitItemMatchInput,
+    OutfitItemMatchOutput,
+    OutfitSlotDetectInput,
+    OutfitSlotDetectOutput,
     SuggestItemAttributesInput,
     SuggestItemAttributesOutput,
     SuggestItemPairingsInput,
@@ -29,6 +33,16 @@ class LLMProvider(Protocol):
         ...
 
     async def ask_user_items(self, payload: AskUserItemsInput, *, timeout_ms: int) -> AskUserItemsOutput:
+        ...
+
+    async def detect_outfit_slots(
+        self, payload: OutfitSlotDetectInput, *, timeout_ms: int
+    ) -> OutfitSlotDetectOutput:
+        ...
+
+    async def match_outfit_items(
+        self, payload: OutfitItemMatchInput, *, timeout_ms: int
+    ) -> OutfitItemMatchOutput:
         ...
 
 
@@ -71,5 +85,27 @@ class NullProvider:
 
         return AskUserItemsOutput(
             answer="",
+            usage=LLMUsage(model=self.name, prompt_version=payload.prompt_version, cached=True),
+        )
+
+    async def detect_outfit_slots(
+        self, payload: OutfitSlotDetectInput, *, timeout_ms: int
+    ) -> OutfitSlotDetectOutput:
+        from app.services.llm.types import OutfitSlotDetectOutput, LLMUsage
+
+        return OutfitSlotDetectOutput(
+            slots=[],
+            missing_count=0,
+            usage=LLMUsage(model=self.name, prompt_version=payload.prompt_version, cached=True),
+        )
+
+    async def match_outfit_items(
+        self, payload: OutfitItemMatchInput, *, timeout_ms: int
+    ) -> OutfitItemMatchOutput:
+        from app.services.llm.types import OutfitItemMatchOutput, LLMUsage
+
+        return OutfitItemMatchOutput(
+            matches=[],
+            missing_count=0,
             usage=LLMUsage(model=self.name, prompt_version=payload.prompt_version, cached=True),
         )

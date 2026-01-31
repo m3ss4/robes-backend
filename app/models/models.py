@@ -148,6 +148,43 @@ class OutfitPhotoAnalysis(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class OutfitMatchJob(Base):
+    __tablename__ = "outfit_match_job"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    image_url: Mapped[str] = mapped_column(Text, nullable=False)
+    worn_date: Mapped[date | None] = mapped_column(sa.Date(), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued")
+    matches_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    slots_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    warnings_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    min_confidence: Mapped[float | None] = mapped_column(sa.Float(), nullable=True)
+    max_per_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PackingCube(Base):
+    __tablename__ = "packing_cube"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    cube_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    weather_tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PackingCubeItem(Base):
+    __tablename__ = "packing_cube_item"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cube_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("packing_cube.id", ondelete="CASCADE"))
+    item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("item.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class OutfitItem(Base):
     __tablename__ = "outfit_item"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -176,6 +213,11 @@ class OutfitWearLog(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     outfit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("outfit.id", ondelete="CASCADE"))
     outfit_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("outfit_revision.id", ondelete="SET NULL"))
+    outfit_photo_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("outfit_photo.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     worn_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     worn_date: Mapped[date | None] = mapped_column(sa.Date(), nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -201,6 +243,11 @@ class ItemWearLog(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("item.id", ondelete="CASCADE"))
+    source_outfit_log_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("outfit_wear_log.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     worn_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     worn_date: Mapped[date | None] = mapped_column(sa.Date(), nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)

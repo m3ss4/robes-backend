@@ -15,6 +15,11 @@ from app.services.llm.types import (
     ExplainOutfitInput,
     ExplainOutfitOutput,
     LLMUsage,
+    OutfitItemMatchInput,
+    OutfitItemMatchOutput,
+    OutfitItemMatchOutItem,
+    OutfitSlotDetectInput,
+    OutfitSlotDetectOutput,
     PairingSuggestionOut,
     SuggestFieldOut,
     SuggestItemAttributesInput,
@@ -22,7 +27,14 @@ from app.services.llm.types import (
     SuggestItemPairingsInput,
     SuggestItemPairingsOutput,
 )
-from app.services.llm.prompts import build_attributes_prompt, build_explain_prompt, build_pairing_prompt, build_ask_items_prompt
+from app.services.llm.prompts import (
+    build_attributes_prompt,
+    build_explain_prompt,
+    build_pairing_prompt,
+    build_ask_items_prompt,
+    build_outfit_slot_prompt,
+    build_outfit_match_prompt,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -33,12 +45,37 @@ class OpenAIProvider:
         self.model_attributes = model_attributes
         self.model_explain = model_explain
 
-    async def _chat(self, messages: List[Dict[str, str]], model: str, timeout_ms: int) -> Dict[str, Any]:
+    async def _chat(self, messages: List[Dict[str, Any]], model: str, timeout_ms: int) -> Dict[str, Any]:
         start = time.perf_counter()
         logger.info("llm:openai request model=%s timeout_ms=%s", model, timeout_ms)
         try:
             resp = await asyncio.wait_for(
                 self.client.chat.completions.create(model=model, messages=messages, temperature=0.2),
+                timeout=timeout_ms / 1000.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("llm:openai timeout model=%s timeout_ms=%s", model, timeout_ms)
+            raise
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        choice = resp.choices[0].message.content if resp.choices else "{}"
+        return {
+            "content": choice,
+            "latency_ms": latency_ms,
+            "tokens_in": getattr(resp.usage, "prompt_tokens", 0) if resp.usage else 0,
+            "tokens_out": getattr(resp.usage, "completion_tokens", 0) if resp.usage else 0,
+        }
+
+    async def _chat_vision(self, messages: List[Dict[str, Any]], model: str, timeout_ms: int) -> Dict[str, Any]:
+        start = time.perf_counter()
+        logger.info("llm:openai vision request model=%s timeout_ms=%s", model, timeout_ms)
+        try:
+            resp = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=0.2,
+                    response_format={"type": "json_object"},
+                ),
                 timeout=timeout_ms / 1000.0,
             )
         except asyncio.TimeoutError:
@@ -118,6 +155,42 @@ class OpenAIProvider:
             ),
         )
 
+    async def detect_outfit_slots(
+        self, payload: OutfitSlotDetectInput, *, timeout_ms: int
+    ) -> OutfitSlotDetectOutput:
+        messages = build_outfit_slot_prompt(payload)
+        res = await self._chat_vision(messages, self.model_attributes, timeout_ms)
+        slots, missing_count = _safe_parse_outfit_slots(res["content"])
+        return OutfitSlotDetectOutput(
+            slots=slots,
+            missing_count=missing_count,
+            usage=LLMUsage(
+                model=self.model_attributes,
+                tokens_in=res["tokens_in"],
+                tokens_out=res["tokens_out"],
+                latency_ms=res["latency_ms"],
+                prompt_version=payload.prompt_version,
+            ),
+        )
+
+    async def match_outfit_items(
+        self, payload: OutfitItemMatchInput, *, timeout_ms: int
+    ) -> OutfitItemMatchOutput:
+        messages = build_outfit_match_prompt(payload)
+        res = await self._chat_vision(messages, self.model_attributes, timeout_ms)
+        matches, missing_count = _safe_parse_outfit_matches(res["content"])
+        return OutfitItemMatchOutput(
+            matches=matches,
+            missing_count=missing_count,
+            usage=LLMUsage(
+                model=self.model_attributes,
+                tokens_in=res["tokens_in"],
+                tokens_out=res["tokens_out"],
+                latency_ms=res["latency_ms"],
+                prompt_version=payload.prompt_version,
+            ),
+        )
+
 
 def _safe_parse_suggestions(raw: str) -> Dict[str, SuggestFieldOut]:
     try:
@@ -152,3 +225,33 @@ def _safe_parse_answer(raw: str) -> str:
         return str(data.get("answer", "")).strip()
     except Exception:
         return raw.strip()
+
+
+def _safe_parse_outfit_slots(raw: str) -> tuple[List[str], int]:
+    try:
+        data = json.loads(raw)
+        slots = data.get("slots", [])
+        missing = int(data.get("missing_count", 0) or 0)
+        if not isinstance(slots, list):
+            slots = []
+        return [str(s) for s in slots], missing
+    except Exception:
+        return [], 0
+
+
+def _safe_parse_outfit_matches(raw: str) -> tuple[List[OutfitItemMatchOutItem], int]:
+    try:
+        data = json.loads(raw)
+        matches = data.get("matches", []) or []
+        missing = int(data.get("missing_count", 0) or 0)
+        out = []
+        for m in matches:
+            if not isinstance(m, dict):
+                continue
+            try:
+                out.append(OutfitItemMatchOutItem.model_validate(m))
+            except Exception:
+                continue
+        return out, missing
+    except Exception:
+        return [], 0

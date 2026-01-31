@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, func, delete
-from uuid import uuid4
+from uuid import uuid4, UUID
 from datetime import datetime, timedelta, timezone, date
+from zoneinfo import ZoneInfo
 import logging
 from app.schemas.schemas import (
     OutfitSuggestIn,
@@ -21,7 +22,7 @@ from app.schemas.schemas import (
 )
 from app.auth.deps import get_current_user_id
 from app.core.db import get_session
-from app.models.models import Outfit as OutfitModel, OutfitItem, OutfitWearLog, OutfitWearLogItem, OutfitRevision
+from app.models.models import Outfit as OutfitModel, OutfitItem, OutfitWearLog, OutfitWearLogItem, OutfitRevision, ItemWearLog
 from app.core.tags import clamp_limits
 from typing import List, Optional
 from app.services.outfit_score import score_outfit as compute_outfit_score
@@ -29,85 +30,17 @@ from app.models.models import Item, SuggestSession
 from app.services import llm as llm_service
 from app.services.llm.types import ExplainOutfitInput
 from app.core.config import settings
+from app.routers.outfits_helpers import (
+    _slot_for_item,
+    _filtered_candidates,
+    _pattern_ok,
+    _normalize_feel_tags,
+    _item_descriptors,
+    _compute_worn_times,
+)
 
 router = APIRouter(prefix="/outfits", tags=["outfits"])
 logger = logging.getLogger("uvicorn.error")
-
-def _slot_for_item(item: Item) -> str:
-    kind = item.kind
-    if kind == "onepiece":
-        return "one_piece"
-    if kind == "outerwear":
-        return "outerwear"
-    if kind == "footwear":
-        return "shoes"
-    if kind == "accessory":
-        return "accessory"
-    if kind == "top":
-        return "top"
-    if kind == "bottom":
-        return "bottom"
-    return "accessory"
-
-
-def _filtered_candidates(items: list[Item], ctx: dict) -> dict[str, list[str]]:
-    event = (ctx.get("event") or "").lower()
-    season = (ctx.get("season") or "").lower()
-    cmap: dict[str, list[tuple[int, str]]] = {}
-    for it in items:
-        slot = _slot_for_item(it)
-        score = 0
-        if event and it.event_tags and event in [e.lower() for e in it.event_tags]:
-            score += 2
-        if season and it.season_tags and season in [s.lower() for s in it.season_tags]:
-            score += 1
-        if it.base_color in {"black", "white", "navy", "gray"}:
-            score += 1
-        cmap.setdefault(slot, []).append((score, str(it.id)))
-    # sort by score desc, then id
-    out: dict[str, list[str]] = {}
-    for slot, vals in cmap.items():
-        vals.sort(key=lambda x: x[0], reverse=True)
-        out[slot] = [v[1] for v in vals[:20]]
-    return out
-
-
-def _pattern_ok(sel: list[dict], item_lookup: dict[str, Item]) -> bool:
-    patterned = 0
-    for s in sel:
-        item = item_lookup.get(s["item_id"])
-        if item and item.pattern and item.pattern != "solid":
-            patterned += 1
-    return patterned <= 1
-
-
-def _normalize_feel_tags(tags: list[str]) -> list[str]:
-    cleaned = []
-    for tag in tags or []:
-        if not tag:
-            continue
-        trimmed = tag.strip()
-        if trimmed:
-            cleaned.append(trimmed[:32])
-    return cleaned[:12]
-
-
-def _item_descriptors(sel: list[dict], item_lookup: dict[str, Item]) -> list[dict]:
-    descs = []
-    for s in sel:
-        item = item_lookup.get(s["item_id"])
-        if not item:
-            continue
-        descs.append(
-            {
-                "slot": s["slot"],
-                "base_color": item.base_color,
-                "pattern": item.pattern,
-                "material": item.material,
-                "name": item.name or "",
-            }
-        )
-    return descs
 
 
 @router.post("/suggest", response_model=OutfitSuggestOut)
@@ -380,13 +313,36 @@ async def _outfit_out(outfit: OutfitModel, session: AsyncSession) -> OutfitOut:
 @router.get("", response_model=List[OutfitOut])
 async def list_outfits(
     status: str | None = Query(None),
+    worn_from: date | None = Query(None),
+    worn_to: date | None = Query(None),
+    item_id: str | None = Query(None),
     session: AsyncSession = Depends(get_session),
     user_id: str = Depends(get_current_user_id),
 ):
-    q = select(OutfitModel).where(OutfitModel.user_id == user_id).order_by(OutfitModel.created_at.desc())
+    q = select(OutfitModel).where(OutfitModel.user_id == user_id)
     if status:
         q = q.where(OutfitModel.status == status)
-    res = await session.execute(q)
+    if item_id:
+        try:
+            item_uuid = UUID(item_id)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="invalid_item_id") from e
+        q = q.join(OutfitItem, OutfitItem.outfit_id == OutfitModel.id).where(OutfitItem.item_id == item_uuid)
+    if worn_from or worn_to:
+        q = q.join(OutfitWearLog, OutfitWearLog.outfit_id == OutfitModel.id).where(
+            OutfitWearLog.user_id == user_id,
+            OutfitWearLog.deleted_at.is_(None),
+        )
+        if worn_from:
+            q = q.where(OutfitWearLog.worn_date >= worn_from)
+        if worn_to:
+            q = q.where(OutfitWearLog.worn_date <= worn_to)
+    id_subq = q.with_only_columns(OutfitModel.id).distinct().subquery()
+    res = await session.execute(
+        select(OutfitModel)
+        .where(OutfitModel.id.in_(select(id_subq.c.id)))
+        .order_by(OutfitModel.created_at.desc())
+    )
     outfits = res.scalars().all()
     return [await _outfit_out(o, session) for o in outfits]
 
@@ -510,7 +466,9 @@ async def log_wear(
         raise HTTPException(status_code=404, detail="outfit_not_found")
     # snapshot items
     items_snapshot = [{"item_id": str(oi.item_id), "slot": oi.slot, "position": oi.position} for oi in outfit.items]
-    worn_at, worn_date = _compute_worn_times(payload.worn_at)
+    worn_at, worn_date = _compute_worn_times(payload.worn_at, payload.worn_date)
+    today = datetime.now(ZoneInfo("Europe/London")).date()
+    is_future = worn_date > today
 
     # idempotent per day
     existing_q = await session.execute(
@@ -534,6 +492,7 @@ async def log_wear(
             season=existing.season,
             mood=existing.mood,
             notes=existing.notes,
+            is_future=is_future,
         )
     # increment rev_no
     rev_no = 1
@@ -593,11 +552,33 @@ async def log_wear(
                 season=existing.season,
                 mood=existing.mood,
                 notes=existing.notes,
+                is_future=is_future,
             )
         raise
     # child items
     for oi in outfit.items:
         session.add(OutfitWearLogItem(wear_log_id=log.id, item_id=oi.item_id, slot=oi.slot))
+        if worn_date == today:
+            res_item = await session.execute(
+                select(ItemWearLog).where(
+                    ItemWearLog.user_id == user_id,
+                    ItemWearLog.item_id == oi.item_id,
+                    ItemWearLog.worn_date == worn_date,
+                    ItemWearLog.deleted_at.is_(None),
+                )
+            )
+            existing_item = res_item.scalar_one_or_none()
+            if not existing_item:
+                session.add(
+                    ItemWearLog(
+                        user_id=user_id,
+                        item_id=oi.item_id,
+                        worn_at=worn_at,
+                        worn_date=worn_date,
+                        source=log.source or "outfit",
+                        source_outfit_log_id=log.id,
+                    )
+                )
     await session.commit()
     return WearLogOut(
         id=str(log.id),
@@ -610,6 +591,7 @@ async def log_wear(
         season=log.season,
         mood=log.mood,
         notes=log.notes,
+        is_future=is_future,
     )
 
 
@@ -641,6 +623,21 @@ async def delete_wear_log_entry(
         elif data.get("deleted") is True and not log.source:
             log.source = "deleted"
         await session.commit()
+        if log.worn_date == datetime.now(ZoneInfo("Europe/London")).date():
+            res = await session.execute(
+                select(ItemWearLog).where(
+                    ItemWearLog.user_id == user_id,
+                    ItemWearLog.worn_date == log.worn_date,
+                    ItemWearLog.source_outfit_log_id == log.id,
+                    ItemWearLog.deleted_at.is_(None),
+                )
+            )
+            item_logs = res.scalars().all()
+            for item_log in item_logs:
+                item_log.deleted_at = datetime.now(timezone.utc)
+                if not item_log.source:
+                    item_log.source = "outfit_deleted"
+            await session.commit()
     return None
 
 
@@ -672,6 +669,7 @@ async def outfit_history(
             season=l.season,
             mood=l.mood,
             notes=l.notes,
+            is_future=(l.worn_date > datetime.now(ZoneInfo("Europe/London")).date()) if l.worn_date else None,
         )
         for l in logs
     ]
@@ -704,20 +702,3 @@ async def outfit_decision(
         outfit.status = "suggested_rejected"
     await session.commit()
     return {"ok": True, "status": outfit.status}
-
-
-def _compute_worn_times(worn_at_str: Optional[str]) -> tuple[datetime, datetime.date]:
-    from zoneinfo import ZoneInfo
-
-    tz_london = ZoneInfo("Europe/London")
-    if worn_at_str:
-        try:
-            dt = datetime.fromisoformat(worn_at_str)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-        except Exception:
-            dt = datetime.now(timezone.utc)
-    else:
-        dt = datetime.now(timezone.utc)
-    worn_date = dt.astimezone(tz_london).date()
-    return dt, worn_date

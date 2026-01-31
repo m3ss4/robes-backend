@@ -83,3 +83,47 @@ class AskUserItemsInput(BaseModel):
 class AskUserItemsOutput(BaseModel):
     answer: str = ""
     usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
+class OutfitSlotDetectInput(BaseModel):
+    image_url: str
+    prompt_version: str = "p1"
+
+
+class OutfitSlotDetectOutput(BaseModel):
+    slots: List[str] = Field(default_factory=list)
+    missing_count: int = 0
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
+class OutfitItemMatchCandidate(BaseModel):
+    item_id: str
+    image_url: str
+    category: Optional[str] = None
+    type: Optional[str] = None
+    base_color: Optional[str] = None
+    pattern: Optional[str] = None
+    fabric_kind: Optional[str] = None
+    brand: Optional[str] = None
+    name: Optional[str] = None
+    similarity: Optional[float] = None
+
+
+class OutfitItemMatchInput(BaseModel):
+    image_url: str
+    slot: str
+    candidates: List[OutfitItemMatchCandidate] = Field(default_factory=list)
+    min_confidence: float = 0.75
+    prompt_version: str = "p1"
+
+
+class OutfitItemMatchOutItem(BaseModel):
+    item_id: str
+    confidence: float
+    reason: Optional[str] = None
+
+
+class OutfitItemMatchOutput(BaseModel):
+    matches: List[OutfitItemMatchOutItem] = Field(default_factory=list)
+    missing_count: int = 0
+    usage: LLMUsage = Field(default_factory=LLMUsage)

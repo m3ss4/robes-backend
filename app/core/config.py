@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     OUTFIT_PHOTO_TOPN_ITEMS: int = 8
     OUTFIT_PHOTO_MATCH_MIN_SIM: float = 0.30
     OUTFIT_PHOTO_MAX_PER_SLOT: int = 1
+    # Outfit LLM matching
+    OUTFIT_MATCH_TOPK_IMAGES: int = 80
+    OUTFIT_MATCH_TOPN_ITEMS: int = 40
+    OUTFIT_MATCH_MIN_SIM: float = 0.22
+    OUTFIT_MATCH_MAX_PER_SLOT: int = 20
+    OUTFIT_MATCH_MIN_CONFIDENCE: float = 0.75
 
     @property
     def cors_origin_list(self) -> List[str]:

@@ -9,13 +9,14 @@ import requests
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.core.config import settings
-from app.models.models import ItemImage, OutfitPhoto
+from app.models.models import ItemImage, OutfitPhoto, OutfitMatchJob
 from app.services.feature_store import compute_sha256
 from app.services import feature_store
 from app.services.outfit_photo_matcher import persist_outfit_photo_analysis
 from workers.vision import extract_features, _open_image
 from app.services.clip_classifier import classify_image
 from app.services.clip_embeddings import embed_image
+from app.services.outfit_item_matcher import match_outfit_image
 
 @celery.task(name="tasks.process_image")
 def process_image(image_b64: str) -> dict:
@@ -127,5 +128,43 @@ def analyze_outfit_photo(outfit_photo_id: str) -> dict:
                 await session.rollback()
                 return {"ok": False, "error": str(e)}
             return {"ok": True, "outfit_photo_id": outfit_photo_id}
+
+    return asyncio.run(_run())
+
+
+@celery.task(name="tasks.analyze_outfit_match_job")
+def analyze_outfit_match_job(job_id: str) -> dict:
+    async def _run() -> dict:
+        engine = create_async_engine(settings.DATABASE_URL, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as session:
+            job = await session.get(OutfitMatchJob, job_id)
+            if not job:
+                return {"ok": False, "error": "outfit_match_job_not_found"}
+            job.status = "processing"
+            await session.commit()
+            try:
+                result = await match_outfit_image(
+                    session,
+                    str(job.user_id),
+                    image_url=job.image_url,
+                    image_b64=None,
+                    image_content_type=None,
+                    min_confidence=float(job.min_confidence or settings.OUTFIT_MATCH_MIN_CONFIDENCE),
+                    max_per_slot=int(job.max_per_slot or settings.OUTFIT_MATCH_MAX_PER_SLOT),
+                )
+                job.matches_json = result.get("matches")
+                job.slots_json = result.get("slots")
+                job.warnings_json = result.get("warnings")
+                job.error = None
+                job.status = "done"
+                await session.commit()
+                return {"ok": True, "job_id": job_id}
+            except Exception as e:
+                await session.rollback()
+                job.status = "failed"
+                job.error = str(e)
+                await session.commit()
+                return {"ok": False, "error": str(e), "job_id": job_id}
 
     return asyncio.run(_run())
