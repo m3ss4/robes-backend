@@ -60,6 +60,25 @@ class Settings(BaseSettings):
     SEARCH_ENABLED: bool = False
     RECS_ENABLED: bool = False
     NOTIFICATIONS_ENABLED: bool = False
+    QUALITY_ENABLED: bool = False
+    # Quality Module settings
+    QUALITY_REFRESH_INTERVAL_DAYS: int = 7  # Weekly refresh default
+    QUALITY_HISTORY_RETENTION_DAYS: int = 180  # 6 months default
+    # Score weights (must sum to 1.0)
+    QUALITY_WEIGHT_VERSATILITY: float = 0.30
+    QUALITY_WEIGHT_UTILIZATION: float = 0.25
+    QUALITY_WEIGHT_COMPLETENESS: float = 0.20
+    QUALITY_WEIGHT_BALANCE: float = 0.15
+    QUALITY_WEIGHT_DIVERSITY: float = 0.10
+    # Default diversity attributes (colors OFF by default)
+    QUALITY_DIVERSITY_COLORS_DEFAULT: bool = False
+    QUALITY_DIVERSITY_PATTERNS_DEFAULT: bool = True
+    QUALITY_DIVERSITY_SEASONS_DEFAULT: bool = True
+    QUALITY_DIVERSITY_STYLES_DEFAULT: bool = True
+    # Minimum data for meaningful scores
+    QUALITY_MIN_ITEMS: int = 5
+    QUALITY_MIN_OUTFITS: int = 3
+    QUALITY_MIN_WEAR_LOGS: int = 10
 
     @property
     def cors_origin_list(self) -> List[str]:

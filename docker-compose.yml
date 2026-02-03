@@ -47,5 +47,29 @@ services:
     volumes:
       - .:/app
 
+  worker_quality:
+    build:
+      context: .
+    container_name: wardrobe_worker_quality
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_started
+    command: celery -A workers.celery_app.celery worker -Q quality -l info
+    volumes:
+      - .:/app
+
+  beat:
+    build:
+      context: .
+    container_name: wardrobe_beat
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_started
+    command: celery -A workers.celery_app.celery beat -l info
+    volumes:
+      - .:/app
+
 volumes:
   db_data:

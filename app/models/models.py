@@ -59,7 +59,7 @@ class ItemImage(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("item.id", ondelete="CASCADE"))
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    url: Mapped[str] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
     bg_removed: Mapped[bool] = mapped_column(Boolean, default=False)
     view: Mapped[str] = mapped_column(String(16), default="front")
     bucket: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -273,6 +273,7 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
     name: Mapped[str | None] = mapped_column(Text, nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -319,3 +320,50 @@ class ItemSuggestionAudit(Base):
     feature_source: Mapped[str | None] = mapped_column(Text, nullable=True)
     image_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     had_family_hint: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+
+class WardrobeQualityScore(Base):
+    """Stores computed quality scores with history retention."""
+    __tablename__ = "wardrobe_quality_score"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
+    total_score: Mapped[float] = mapped_column(Float, nullable=False)
+    versatility_score: Mapped[float] = mapped_column(Float, nullable=False)
+    utilization_score: Mapped[float] = mapped_column(Float, nullable=False)
+    completeness_score: Mapped[float] = mapped_column(Float, nullable=False)
+    balance_score: Mapped[float] = mapped_column(Float, nullable=False)
+    diversity_score: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    explanations: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    items_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    outfits_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    wear_logs_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    diversity_config_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        sa.Index("ix_wardrobe_quality_score_user_computed", "user_id", "computed_at"),
+    )
+
+
+class WardrobeQualitySuggestion(Base):
+    """Stores actionable suggestions for improving wardrobe quality."""
+    __tablename__ = "wardrobe_quality_suggestion"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE"), nullable=False)
+    score_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("wardrobe_quality_score.id", ondelete="CASCADE"), nullable=False)
+    suggestion_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    dimension: Mapped[str] = mapped_column(String(32), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    why: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    expected_impact: Mapped[float | None] = mapped_column(Float, nullable=True)
+    related_item_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        sa.Index("ix_wardrobe_quality_suggestion_user_status", "user_id", "status"),
+    )

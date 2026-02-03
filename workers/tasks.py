@@ -5,11 +5,12 @@ import base64
 import asyncio
 import hashlib
 import requests
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.core.config import settings
-from app.models.models import ItemImage, OutfitPhoto, OutfitMatchJob
+from app.models.models import ItemImage, OutfitPhoto, OutfitMatchJob, User
 from app.services.feature_store import compute_sha256
 from app.services import feature_store
 from app.services.outfit_photo_matcher import persist_outfit_photo_analysis
@@ -166,5 +167,119 @@ def analyze_outfit_match_job(job_id: str) -> dict:
                 job.error = str(e)
                 await session.commit()
                 return {"ok": False, "error": str(e), "job_id": job_id}
+
+    return asyncio.run(_run())
+
+
+@celery.task(name="tasks.refresh_user_quality")
+def refresh_user_quality(user_id: str) -> dict:
+    """Compute and store quality score for a single user."""
+    from app.services.quality import QualityEngine
+
+    async def _run() -> dict:
+        engine = create_async_engine(settings.DATABASE_URL, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as session:
+            quality_engine = QualityEngine()
+            try:
+                score, suggestions = await quality_engine.compute_score(
+                    session, user_id, persist=True
+                )
+                return {
+                    "ok": True,
+                    "user_id": user_id,
+                    "score_id": str(score.id),
+                    "total_score": score.total_score,
+                    "suggestions_count": len(suggestions),
+                }
+            except Exception as e:
+                return {"ok": False, "user_id": user_id, "error": str(e)}
+
+    return asyncio.run(_run())
+
+
+@celery.task(name="tasks.refresh_all_quality_scores")
+def refresh_all_quality_scores() -> dict:
+    """Refresh quality scores for all users due for refresh."""
+    from app.services.quality import QualityEngine
+    from sqlalchemy import select
+
+    async def _run() -> dict:
+        engine = create_async_engine(settings.DATABASE_URL, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as session:
+            quality_engine = QualityEngine()
+
+            result = await session.execute(select(User))
+            users = result.scalars().all()
+
+            refreshed = 0
+            errors = 0
+
+            for user in users:
+                prefs = user.quality_preferences or {}
+                interval_days = prefs.get(
+                    "refresh_interval_days",
+                    settings.QUALITY_REFRESH_INTERVAL_DAYS,
+                )
+
+                latest = await quality_engine.get_latest_score(session, str(user.id))
+                if latest:
+                    next_refresh = latest.computed_at + timedelta(days=interval_days)
+                    if datetime.now(timezone.utc) < next_refresh:
+                        continue
+
+                try:
+                    await quality_engine.compute_score(session, str(user.id))
+                    refreshed += 1
+
+                    retention = prefs.get(
+                        "history_retention_days",
+                        settings.QUALITY_HISTORY_RETENTION_DAYS,
+                    )
+                    await quality_engine.cleanup_old_scores(
+                        session, str(user.id), retention
+                    )
+                except Exception:
+                    errors += 1
+
+            return {
+                "ok": True,
+                "users_checked": len(users),
+                "refreshed": refreshed,
+                "errors": errors,
+            }
+
+    return asyncio.run(_run())
+
+
+@celery.task(name="tasks.cleanup_quality_history")
+def cleanup_quality_history() -> dict:
+    """Clean up old quality scores beyond retention period."""
+    from app.services.quality import QualityEngine
+    from sqlalchemy import select
+
+    async def _run() -> dict:
+        engine = create_async_engine(settings.DATABASE_URL, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as session:
+            quality_engine = QualityEngine()
+
+            result = await session.execute(select(User))
+            users = result.scalars().all()
+
+            total_deleted = 0
+            for user in users:
+                prefs = user.quality_preferences or {}
+                retention = prefs.get(
+                    "history_retention_days",
+                    settings.QUALITY_HISTORY_RETENTION_DAYS,
+                )
+                deleted = await quality_engine.cleanup_old_scores(
+                    session, str(user.id), retention
+                )
+                total_deleted += deleted
+
+            return {"ok": True, "deleted": total_deleted}
 
     return asyncio.run(_run())

@@ -7,6 +7,7 @@ from app.routers import health, items, outfits, wear as wear_router, llm as llm_
 from app.routers import search as search_router
 from app.routers import recommendations as recommendations_router
 from app.routers import notifications as notifications_router
+from app.routers import quality as quality_router
 from app.routers import tags as tags_router
 from app.routers import taxonomy as taxonomy_router
 from app.routers import auth as auth_router
@@ -46,6 +47,8 @@ if settings.RECS_ENABLED:
     app.include_router(recommendations_router.router, prefix=prefix)
 if settings.NOTIFICATIONS_ENABLED:
     app.include_router(notifications_router.router, prefix=prefix)
+if settings.QUALITY_ENABLED:
+    app.include_router(quality_router.router, prefix=prefix)
 
 # LLM providers
 try:

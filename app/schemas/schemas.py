@@ -83,6 +83,16 @@ from app.schemas.notifications import (
     NotificationOut,
     NotificationsOut,
 )
+from app.schemas.quality import (
+    QualityPreferences,
+    QualityPreferencesUpdate,
+    QualitySummaryOut,
+    QualityScoreOut,
+    DimensionScore,
+    SuggestionsOut,
+    SuggestionOut,
+    SuggestionDismissIn,
+)
 
 __all__ = [
     "ItemImageIn",
@@ -150,4 +160,12 @@ __all__ = [
     "RecsOut",
     "NotificationOut",
     "NotificationsOut",
+    "QualityPreferences",
+    "QualityPreferencesUpdate",
+    "QualitySummaryOut",
+    "QualityScoreOut",
+    "DimensionScore",
+    "SuggestionsOut",
+    "SuggestionOut",
+    "SuggestionDismissIn",
 ]
