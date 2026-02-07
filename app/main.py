@@ -12,6 +12,7 @@ from app.routers import tags as tags_router
 from app.routers import taxonomy as taxonomy_router
 from app.routers import auth as auth_router
 from app.routers import sessions as sessions_router
+from app.routers import votes as votes_router
 from app.llm.base import ProviderRegistry
 from app.llm.openai_provider import OpenAIProvider
 from app.llm.local_provider import LocalProvider
@@ -36,6 +37,7 @@ app.include_router(tags_router.router, prefix=prefix)
 app.include_router(taxonomy_router.router, prefix=prefix)
 app.include_router(auth_router.router, prefix=prefix)
 app.include_router(sessions_router.router, prefix=prefix)
+app.include_router(votes_router.router, prefix=prefix)
 app.include_router(wear_router.router, prefix=prefix)
 app.include_router(llm_router.router, prefix=prefix)
 app.include_router(outfit_photos_router.router, prefix=prefix)

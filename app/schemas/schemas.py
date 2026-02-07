@@ -93,6 +93,15 @@ from app.schemas.quality import (
     SuggestionOut,
     SuggestionDismissIn,
 )
+from app.schemas.votes import (
+    VoteSessionCreateIn,
+    VoteSessionCreateOut,
+    VoteSessionOutfitOut,
+    VoteSessionOut,
+    VoteIn,
+    VoteOut,
+    VoteOutfitItemOut,
+)
 
 __all__ = [
     "ItemImageIn",
@@ -168,4 +177,11 @@ __all__ = [
     "SuggestionsOut",
     "SuggestionOut",
     "SuggestionDismissIn",
+    "VoteSessionCreateIn",
+    "VoteSessionCreateOut",
+    "VoteSessionOutfitOut",
+    "VoteOutfitItemOut",
+    "VoteSessionOut",
+    "VoteIn",
+    "VoteOut",
 ]

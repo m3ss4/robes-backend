@@ -267,6 +267,47 @@ class SuggestSession(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class VoteSession(Base):
+    __tablename__ = "vote_session"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    share_code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        sa.Index("ix_vote_session_share_code", "share_code"),
+    )
+
+
+class VoteSessionOutfit(Base):
+    __tablename__ = "vote_session_outfit"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vote_session.id", ondelete="CASCADE"))
+    outfit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("outfit.id", ondelete="CASCADE"))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        sa.UniqueConstraint("session_id", "outfit_id", name="uq_vote_session_outfit"),
+        sa.Index("ix_vote_session_outfit_session_position", "session_id", "position"),
+    )
+
+
+class Vote(Base):
+    __tablename__ = "vote"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vote_session.id", ondelete="CASCADE"))
+    outfit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("outfit.id", ondelete="CASCADE"))
+    voter_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        sa.UniqueConstraint("session_id", "voter_hash", name="uq_vote_session_voter"),
+        sa.Index("ix_vote_session_outfit", "session_id", "outfit_id"),
+    )
+
+
 class User(Base):
     __tablename__ = "user"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

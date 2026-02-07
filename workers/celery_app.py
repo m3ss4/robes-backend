@@ -17,6 +17,7 @@ celery.conf.task_routes = {
     "tasks.refresh_user_quality": {"queue": "quality"},
     "tasks.refresh_all_quality_scores": {"queue": "quality"},
     "tasks.cleanup_quality_history": {"queue": "quality"},
+    "tasks.cleanup_vote_sessions": {"queue": "quality"},
 }
 
 # Beat schedule for periodic tasks
@@ -28,5 +29,9 @@ celery.conf.beat_schedule = {
     "cleanup-quality-history-monthly": {
         "task": "tasks.cleanup_quality_history",
         "schedule": crontab(hour=4, minute=0, day_of_month=1),  # 1st of month 4 AM
+    },
+    "cleanup-vote-sessions-daily": {
+        "task": "tasks.cleanup_vote_sessions",
+        "schedule": crontab(hour=2, minute=30),  # Daily 2:30 AM
     },
 }

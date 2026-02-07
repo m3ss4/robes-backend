@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     QUALITY_MIN_ITEMS: int = 5
     QUALITY_MIN_OUTFITS: int = 3
     QUALITY_MIN_WEAR_LOGS: int = 10
+    # Voting share URLs
+    VOTE_SHARE_BASE_URL: Optional[str] = None
+    VOTE_SESSION_TTL_HOURS: int = 168
 
     @property
     def cors_origin_list(self) -> List[str]:

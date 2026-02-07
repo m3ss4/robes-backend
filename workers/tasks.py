@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.core.config import settings
-from app.models.models import ItemImage, OutfitPhoto, OutfitMatchJob, User
+from app.models.models import ItemImage, OutfitPhoto, OutfitMatchJob, User, VoteSession
 from app.services.feature_store import compute_sha256
 from app.services import feature_store
 from app.services.outfit_photo_matcher import persist_outfit_photo_analysis
@@ -281,5 +281,27 @@ def cleanup_quality_history() -> dict:
                 total_deleted += deleted
 
             return {"ok": True, "deleted": total_deleted}
+
+    return asyncio.run(_run())
+
+
+@celery.task(name="tasks.cleanup_vote_sessions")
+def cleanup_vote_sessions() -> dict:
+    """Delete expired vote sessions and related data."""
+    from sqlalchemy import delete
+
+    async def _run() -> dict:
+        engine = create_async_engine(settings.DATABASE_URL, echo=False)
+        Session = async_sessionmaker(engine, expire_on_commit=False)
+        async with Session() as session:
+            now = datetime.now(timezone.utc)
+            res = await session.execute(
+                delete(VoteSession).where(
+                    VoteSession.expires_at.isnot(None),
+                    VoteSession.expires_at < now,
+                )
+            )
+            await session.commit()
+            return {"ok": True, "deleted": int(res.rowcount or 0)}
 
     return asyncio.run(_run())
